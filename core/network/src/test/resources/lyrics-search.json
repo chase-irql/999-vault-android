@@ -1,0 +1,20 @@
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 95080,
+      "public_id": 34,
+      "name": "Big Dog",
+      "category": "unreleased",
+      "era": {"id": 110, "name": "DRFL"},
+      "path": "Compilation/2. Unreleased/Big Dog.mp3",
+      "track_titles": ["Big Dog"],
+      "credited_artists": "Juice WRLD",
+      "producers": "Nick Mira",
+      "length": "3:56",
+      "lyrics": "First line\r\nSecond line with the searched phrase.\nThird line"
+    }
+  ]
+}

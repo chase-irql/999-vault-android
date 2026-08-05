@@ -1,0 +1,32 @@
+{
+  "count": 2,
+  "next": "http://juicewrldapi.com/juicewrld/songs/?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": 94316,
+      "public_id": 2354,
+      "name": "  Alternate Name  ",
+      "category": "unreleased",
+      "era": {
+        "id": 101,
+        "name": "jute",
+        "description": "JUICED UP THE EP era",
+        "time_frame": "2014-2017"
+      },
+      "path": "Compilation/2. Unreleased/2MININHELL.mp3",
+      "track_titles": ["2MININHELL", "2 Minutes In Hell", "2MININHELL"],
+      "credited_artists": "JuiceTheKidd",
+      "producers": "J Knight, Nick Mira",
+      "length": "3:42",
+      "image_url": "https://evil.invalid/tracker.png",
+      "lyrics": "fixture lyric"
+    },
+    {
+      "id": -1,
+      "public_id": 9,
+      "name": "Invalid identity",
+      "path": "Compilation/invalid.mp3"
+    }
+  ]
+}

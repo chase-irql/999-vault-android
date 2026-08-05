@@ -1,0 +1,9 @@
+{
+  "current_path": "Compilation",
+  "path_parts": ["Compilation"],
+  "items": [
+    {"name":"Sessions","path":"Compilation/Sessions","type":"directory","size":0},
+    {"name":"Track.mp3","path":"Compilation/Track.mp3","type":"file","size":12345,"extension":".mp3"},
+    {"name":"Traversal","path":"../outside.txt","type":"file","size":4}
+  ]
+}

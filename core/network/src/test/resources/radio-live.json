@@ -1,0 +1,18 @@
+{
+  "station": "9 9 9 FM",
+  "state": "playing",
+  "now_playing": {
+    "title": "In My Head",
+    "artist": "Juice WRLD",
+    "album": "Sessions",
+    "elapsed_ms": 168533,
+    "duration_ms": 240880
+  },
+  "up_next": {"title":"Maze","artist":"Juice WRLD","album":"Sessions"},
+  "queue_preview": ["Juice WRLD — Maze", "Juice WRLD — Rental"],
+  "discord_listeners": 3,
+  "web_listeners": 12,
+  "total_listeners": 15,
+  "is_live": true,
+  "stream_url": "http://evil.invalid/stream.mp3"
+}
