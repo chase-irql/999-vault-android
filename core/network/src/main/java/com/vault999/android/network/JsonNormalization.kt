@@ -162,7 +162,10 @@ internal class JsonNormalizer(
     private fun songOrNull(element: JsonElement?): CanonicalSong? {
         val value = element as? JsonObject ?: return null
         val id = value.positiveLong("id") ?: return null
-        val publicNumber = value.positiveLong("public_id") ?: value.positiveLong("publicId") ?: return null
+        // A small set of valid archive records has no public catalogue number. Their canonical
+        // database ID is still stable and is the ID stored by account playlists. Retaining those
+        // records is required for synced playlists to resolve and play them.
+        val publicNumber = value.positiveLong("public_id") ?: value.positiveLong("publicId") ?: id
         val titles = value.array("track_titles")?.mapNotNull { clean(it.primitiveContent(), 300).takeIf(String::isNotEmpty) }.orEmpty()
         val rawName = clean(value.string("name"), 300)
         val title = titles.firstOrNull() ?: rawName.ifEmpty { "Unknown track" }

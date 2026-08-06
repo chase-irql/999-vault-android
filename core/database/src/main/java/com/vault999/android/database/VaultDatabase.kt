@@ -16,7 +16,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "songs", indices = [Index("publicNumber", unique = true), Index("archivePath", unique = true)])
+@Entity(tableName = "songs", indices = [Index("publicNumber", unique = true), Index("archivePath")])
 data class SongEntity(
     @PrimaryKey val id: Long,
     val publicNumber: Long,
@@ -432,7 +432,7 @@ interface CloudLibraryDao {
         CloudPlaylistSongEntity::class,
         CloudMutationEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class VaultDatabase : RoomDatabase() {
@@ -476,7 +476,14 @@ abstract class VaultDatabase : RoomDatabase() {
                 database.execSQL("CREATE INDEX IF NOT EXISTS `index_listening_events_accountId` ON `listening_events` (`accountId`)")
             }
         }
-        internal val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP INDEX IF EXISTS `index_songs_archivePath`")
+                database.execSQL("CREATE INDEX IF NOT EXISTS `index_songs_archivePath` ON `songs` (`archivePath`)")
+            }
+        }
+        internal val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
         fun create(context: Context): VaultDatabase = Room.databaseBuilder(context, VaultDatabase::class.java, "vault.db")
             .addMigrations(*ALL_MIGRATIONS)

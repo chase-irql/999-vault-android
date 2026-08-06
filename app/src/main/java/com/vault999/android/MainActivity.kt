@@ -256,6 +256,40 @@ fun VaultApp() {
         ),
     )
     val cloudLibraryState by cloudLibraryViewModel.state.collectAsStateWithLifecycle()
+    val cloudSongIds = remember(cloudLibraryState.projection.cloudLikes, cloudLibraryState.projection.cloudPlaylists) {
+        (cloudLibraryState.projection.cloudLikes.filter { it.liked }.map { it.songId } +
+            cloudLibraryState.projection.cloudPlaylists.flatMap { it.songIds }).distinct()
+    }
+    LaunchedEffect(cloudSongIds, catalogState.songs.size) {
+        catalogViewModel.hydrateCloudSongs(cloudSongIds)
+    }
+    val cloudSongsById = remember(catalogState.songs) { cloudSongIndex(catalogState.songs) }
+    val legacyLikeMigrations = remember(cloudLibraryState.projection.cloudLikes, cloudSongsById) {
+        cloudLibraryState.projection.cloudLikes.asSequence()
+            .filter { it.liked }
+            .mapNotNull { like -> cloudSongsById[like.songId]?.let { song -> like.songId.takeIf { it != song.id }?.let { it to song.id } } }
+            .toMap()
+    }
+    LaunchedEffect(cloudLibraryState.activeAccountId, legacyLikeMigrations) {
+        if (legacyLikeMigrations.isNotEmpty()) cloudLibraryViewModel.migrateLegacyLikes(legacyLikeMigrations)
+    }
+    val deviceFavoriteIds = remember(libraryState.favorites) { libraryState.favorites.mapNotNull { it.canonicalSongId }.toSet() }
+    val cloudLikedCanonicalIds = remember(cloudLibraryState.projection.cloudLikes, cloudSongsById) {
+        cloudLibraryState.projection.cloudLikes.asSequence()
+            .filter { it.liked }
+            .mapNotNull { cloudSongsById[it.songId]?.id }
+            .toSet()
+    }
+    val likedCanonicalIds = deviceFavoriteIds + cloudLikedCanonicalIds
+    val toggleLike: (CanonicalSong) -> Unit = { song ->
+        val localLiked = song.id in deviceFavoriteIds
+        val cloudLike = cloudLibraryState.projection.cloudLikes.likeFor(song)
+        val desired = !(localLiked || cloudLike != null)
+        if (localLiked != desired) libraryViewModel.toggleFavorite(song.id)
+        if (cloudLibraryState.projection.cloudVisible && (cloudLike != null) != desired) {
+            cloudLibraryViewModel.setLike(cloudLike?.songId ?: song.id, desired)
+        }
+    }
     LaunchedEffect(accountState.browserUrl) {
         val url = accountState.browserUrl ?: return@LaunchedEffect
         runCatching { CustomTabsIntent.Builder().build().launchUrl(context, android.net.Uri.parse(url)) }
@@ -403,8 +437,8 @@ fun VaultApp() {
                     onRetry = catalogViewModel::refresh,
                     onAnother = catalogViewModel::discover,
                     onPlay = playSong,
-                    favoriteSongIds = libraryState.favorites.mapNotNull { it.canonicalSongId }.toSet(),
-                    onFavorite = libraryViewModel::toggleFavorite,
+                    favoriteSongIds = likedCanonicalIds,
+                    onFavorite = { songId -> cloudSongsById[songId]?.let(toggleLike) },
                     onFullCollection = downloadViewModel::enqueueFullCollection,
                     onAccount = { navController.navigate("settings") },
                     onNested = navController::navigate,
@@ -509,12 +543,9 @@ fun VaultApp() {
             }
             composable("now-playing") {
                 val currentSong = playbackState.currentItem?.canonicalSongId?.let { id -> catalogState.songs.firstOrNull { it.id == id } }
-                val cloudLike = currentSong?.id?.let { id -> cloudLibraryState.projection.cloudLikes.firstOrNull { it.songId == id } }
                 MobileNowPlayingScreen(
                     state = playbackState,
-                    favorite = currentSong?.id in libraryState.favorites.mapNotNull { it.canonicalSongId }.toSet(),
-                    cloudLiked = cloudLike?.liked == true,
-                    cloudVisible = cloudLibraryState.projection.cloudVisible,
+                    favorite = currentSong?.id in likedCanonicalIds,
                     canDownload = currentSong?.archivePath != null,
                     onToggle = playbackController::toggle,
                     onPrevious = playbackController::previous,
@@ -523,8 +554,7 @@ fun VaultApp() {
                     onShuffle = playbackController::setShuffle,
                     onRepeat = playbackController::setRepeat,
                     onRetry = playbackController::retry,
-                    onFavorite = { currentSong?.id?.let(libraryViewModel::toggleFavorite) },
-                    onCloudLike = { currentSong?.id?.let { cloudLibraryViewModel.setLike(it, cloudLike?.liked != true) } },
+                    onFavorite = { currentSong?.let(toggleLike) },
                     onLyrics = {
                         currentSong?.let { song ->
                             selectedLyrics = SearchResult(song)
@@ -1591,7 +1621,7 @@ private fun playPlaylist(
     shuffle: Boolean,
     controller: PlaybackController,
 ) {
-    val byId = catalog.associateBy { it.id }
+    val byId = cloudSongIndex(catalog)
     val items = songIds.mapNotNull(byId::get).filter(CanonicalSong::isPlayable).map { song ->
         QueueItem(
             mediaId = "song:${song.id}",
@@ -1627,7 +1657,7 @@ private fun PlaylistEditorScreen(
     var songQuery by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    val songsById = remember(catalog) { catalog.associateBy { it.id } }
+    val songsById = remember(catalog) { cloudSongIndex(catalog) }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },

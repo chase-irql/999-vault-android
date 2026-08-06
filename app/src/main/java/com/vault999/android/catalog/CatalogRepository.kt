@@ -9,6 +9,11 @@ import com.vault999.android.network.CatalogQuery
 import com.vault999.android.network.JuiceWrldApiClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 data class CatalogDashboard(
     val healthy: Boolean,
@@ -50,9 +55,33 @@ class CatalogRepository(
 
     suspend fun randomSong(): CanonicalSong? = api.randomRadio().song
 
+    suspend fun hydrateByCanonicalIds(songIds: Collection<Long>): Int = coroutineScope {
+        val limiter = Semaphore(HYDRATION_CONCURRENCY)
+        val songs = songIds.asSequence()
+            .filter { it > 0 }
+            .distinct()
+            .take(MAX_HYDRATION_SONGS)
+            .map { id ->
+                async {
+                    limiter.withPermit { runCatching { api.song(id).song }.getOrNull() }
+                }
+            }
+            .toList()
+            .awaitAll()
+            .filterNotNull()
+            .distinctBy(CanonicalSong::id)
+        if (songs.isNotEmpty()) {
+            val fetchedAt = nowEpochMs()
+            dao.upsertAll(songs.map { it.asEntity(fetchedAt) })
+        }
+        songs.size
+    }
+
     private companion object {
         const val MAX_CATALOG_PAGES = 100
         const val MAX_CATALOG_SONGS = 10_000
+        const val MAX_HYDRATION_SONGS = 500
+        const val HYDRATION_CONCURRENCY = 6
     }
 }
 

@@ -26,7 +26,7 @@ class VaultDatabaseMigrationTest {
             close()
         }
 
-        val database = helper.runMigrationsAndValidate(NAME, 4, true, *VaultDatabase.ALL_MIGRATIONS)
+        val database = helper.runMigrationsAndValidate(NAME, 5, true, *VaultDatabase.ALL_MIGRATIONS)
         database.query("SELECT accountId, acknowledged FROM listening_events").use { cursor ->
             assertEquals(true, cursor.moveToFirst())
             assertEquals(true, cursor.isNull(0))

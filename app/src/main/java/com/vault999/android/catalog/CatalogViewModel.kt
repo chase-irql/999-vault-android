@@ -34,6 +34,7 @@ class CatalogViewModel(
     )
     val state: StateFlow<CatalogUiState> = mutable.asStateFlow()
     private val fixtureMode = fixtureSongs.isNotEmpty()
+    private val hydratingCloudIds = mutableSetOf<Long>()
 
     init {
         if (!fixtureMode) {
@@ -79,6 +80,23 @@ class CatalogViewModel(
             runCatching { withContext(Dispatchers.IO) { repository.randomSong() } }
                 .onSuccess { song -> mutable.update { it.copy(randomSong = song, discoveryLoading = false) } }
                 .onFailure { mutable.update { it.copy(discoveryLoading = false) } }
+        }
+    }
+
+    fun hydrateCloudSongs(songIds: Collection<Long>) {
+        if (fixtureMode) return
+        val known = state.value.songs.flatMapTo(mutableSetOf()) { song -> listOf(song.id, song.publicNumber) }
+        val unresolved = songIds.asSequence()
+            .filter { it > 0 && it !in known && hydratingCloudIds.add(it) }
+            .take(500)
+            .toList()
+        if (unresolved.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { repository.hydrateByCanonicalIds(unresolved) }
+            } finally {
+                hydratingCloudIds.removeAll(unresolved.toSet())
+            }
         }
     }
 

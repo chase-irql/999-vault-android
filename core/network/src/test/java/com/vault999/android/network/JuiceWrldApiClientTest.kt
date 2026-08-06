@@ -56,6 +56,23 @@ class JuiceWrldApiClientTest {
         assertFalse(page.hasPrevious)
     }
 
+    @Test fun `detail without a public number retains its canonical account sync identity`() = runBlocking {
+        val api = client { request ->
+            response(
+                request,
+                200,
+                """{"id":96432,"public_id":null,"name":"On The Low","path":"Compilation/On The Low.mp3","credited_artists":"JuiceTheKidd","length":"4:05","image_url":"/assets/jute.png"}""",
+            )
+        }
+
+        val song = api.song(96432).song
+
+        assertEquals(96432L, song.id)
+        assertEquals(96432L, song.publicNumber)
+        assertEquals("On The Low", song.title)
+        assertTrue(song.isPlayable)
+    }
+
     @Test fun `health stats eras detail archive and radio use deterministic fixtures`() = runBlocking {
         val responses = ArrayDeque(
             listOf(

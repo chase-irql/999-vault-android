@@ -386,7 +386,7 @@ internal fun MobileLibraryScreen(
     var adding by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<LibraryDelete?>(null) }
-    val songsById = remember(catalog) { catalog.associateBy { it.id } }
+    val songsById = remember(catalog) { cloudSongIndex(catalog) }
     pendingDelete?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
@@ -453,7 +453,10 @@ internal fun MobileLibraryScreen(
                 if (state.downloads.isEmpty()) item { CompactEmpty(Icons.Rounded.Download, "No downloads") }
             }
             LibraryShelf.FAVORITES -> {
-                val likedSongs = state.favorites.mapNotNull { favorite -> favorite.canonicalSongId?.let(songsById::get) }
+                val likedSongs = (
+                    state.favorites.mapNotNull { it.canonicalSongId } +
+                        cloud.projection.cloudLikes.filter { it.liked }.map { it.songId }
+                    ).mapNotNull(songsById::get).distinctBy { it.id }
                 items(likedSongs, key = { it.id }) { song ->
                     LibraryRow(song.title, song.artist, Icons.Rounded.Favorite, { onPlaySong(song) }) {
                         IconButton(onClick = { onPlaySong(song) }) { Icon(Icons.Rounded.PlayArrow, "Play ${song.title}") }
@@ -599,8 +602,6 @@ internal fun MobileMiniPlayer(item: QueueItem, playing: Boolean, positionMs: Lon
 internal fun MobileNowPlayingScreen(
     state: PlaybackUiState,
     favorite: Boolean,
-    cloudLiked: Boolean,
-    cloudVisible: Boolean,
     canDownload: Boolean,
     onToggle: () -> Unit,
     onPrevious: () -> Unit,
@@ -610,7 +611,6 @@ internal fun MobileNowPlayingScreen(
     onRepeat: (RepeatMode) -> Unit,
     onRetry: () -> Unit,
     onFavorite: () -> Unit,
-    onCloudLike: () -> Unit,
     onLyrics: () -> Unit,
     onDownload: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -681,7 +681,6 @@ internal fun MobileNowPlayingScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                 PlayerAction(Icons.Rounded.Download, "Download", onDownload, canDownload)
                 PlayerAction(Icons.AutoMirrored.Rounded.Article, "Lyrics", onLyrics, state.currentItem?.canonicalSongId != null)
-                if (cloudVisible) PlayerAction(if (cloudLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, "Cloud like", onCloudLike, state.currentItem?.canonicalSongId != null)
                 PlayerAction(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", onOpenQueue, state.queue.isNotEmpty())
             }
         }

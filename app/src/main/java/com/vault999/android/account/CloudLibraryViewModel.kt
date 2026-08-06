@@ -62,6 +62,15 @@ class CloudLibraryViewModel(
 
     fun setLike(songId: Long, liked: Boolean) = mutate { accountId -> repository?.setLike(accountId, songId, liked) }
 
+    fun migrateLegacyLikes(migrations: Map<Long, Long>) = mutate { accountId ->
+        migrations.forEach { (legacyId, canonicalId) ->
+            if (legacyId != canonicalId) {
+                repository?.setLike(accountId, legacyId, false)
+                repository?.setLike(accountId, canonicalId, true)
+            }
+        }
+    }
+
     fun createPlaylist(name: String, description: String = "") = mutate { accountId ->
         repository?.createPlaylist(accountId, name, description)
     }
