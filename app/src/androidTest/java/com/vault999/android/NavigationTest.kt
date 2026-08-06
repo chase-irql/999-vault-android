@@ -21,11 +21,11 @@ class NavigationTest {
 
     @Test
     fun topLevelDestinationsRemainReachable() {
-        compose.onNodeWithText("THE ARCHIVE, IN YOUR POCKET").assertIsDisplayed()
+        compose.onNodeWithText("The Vault").assertIsDisplayed()
         compose.onNodeWithContentDescription("Listen tab").performClick()
         compose.onNodeWithContentDescription("Listen tab", substring = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription("My Music tab").performClick()
-        compose.onNodeWithText("On this device").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Library tab").performClick()
+        compose.onNodeWithText("Your Library").assertIsDisplayed()
         compose.onNodeWithContentDescription("Search tab").performClick()
         compose.onNodeWithContentDescription("Search tab", substring = true).assertIsDisplayed()
     }
@@ -41,9 +41,9 @@ class NavigationTest {
             }
         }
         compose.onNodeWithContentDescription("Listen tab").assertIsDisplayed().performClick()
-        compose.onNodeWithContentDescription("My Music tab").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Library tab").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("Search tab").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("Archive tab").assertIsDisplayed().performClick()
-        compose.onNodeWithText("THE ARCHIVE, IN YOUR POCKET").assertIsDisplayed()
+        compose.onNodeWithText("The Vault").assertIsDisplayed()
     }
 }

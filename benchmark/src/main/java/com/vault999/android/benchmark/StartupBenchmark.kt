@@ -39,7 +39,7 @@ class StartupBenchmark {
             startActivityAndWait()
             if (device.hasObject(By.text("Now Playing"))) device.pressBack()
             device.findObject(By.desc("Archive tab"))?.click()
-            check(device.wait(Until.hasObject(By.text("THE ARCHIVE, IN YOUR POCKET")), 3_000))
+            check(device.wait(Until.hasObject(By.text("The Vault")), 3_000))
         },
     ) {
         val x = device.displayWidth / 2
@@ -61,8 +61,8 @@ class StartupBenchmark {
             seedAndStopTarget()
             startActivityAndWait()
             if (device.hasObject(By.text("Now Playing"))) device.pressBack()
-            checkNotNull(device.findObject(By.desc("My Music tab"))).click()
-            check(device.wait(Until.hasObject(By.text("My Music")), 3_000))
+            checkNotNull(device.findObject(By.desc("Library tab"))).click()
+            check(device.wait(Until.hasObject(By.text("Your Library")), 3_000))
             check(device.wait(Until.hasObject(By.textStartsWith("Benchmark playlist")), 8_000))
         },
     ) {
@@ -89,7 +89,7 @@ class StartupBenchmark {
             check(device.wait(Until.hasObject(By.descContains("Mini player")), 8_000))
         },
     ) {
-        checkNotNull(device.findObject(By.desc("Open Now Playing"))).click()
+        checkNotNull(device.findObject(By.descContains("Mini player"))).click()
         check(device.wait(Until.hasObject(By.text("Now Playing")), 3_000))
         device.waitForIdle()
     }

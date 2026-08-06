@@ -2,6 +2,7 @@ package com.vault999.android.designsystem
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -23,13 +24,19 @@ object VaultColors {
     val Red = Color(0xFFEF4050)
     val Green = Color(0xFF52D28A)
     val Muted = Color(0xFFA8B5C2)
+    val Ink = Color(0xFF0B1117)
+    val BlueBlack = Color(0xFF102330)
 }
 
 private val VaultColorScheme: ColorScheme = darkColorScheme(
     primary = VaultColors.Yellow,
     onPrimary = VaultColors.Canvas,
+    primaryContainer = Color(0xFF3A3D0B),
+    onPrimaryContainer = VaultColors.Yellow,
     secondary = VaultColors.Cyan,
     onSecondary = VaultColors.Canvas,
+    secondaryContainer = Color(0xFF123746),
+    onSecondaryContainer = VaultColors.Cyan,
     tertiary = VaultColors.Green,
     background = VaultColors.Canvas,
     onBackground = Color(0xFFF5F8FA),
@@ -57,12 +64,11 @@ fun VaultTheme(content: @Composable () -> Unit) {
         colorScheme = VaultColorScheme,
         typography = VaultTypography,
         shapes = androidx.compose.material3.Shapes(
-            extraSmall = CutCornerShape(2.dp),
-            small = CutCornerShape(topEnd = 8.dp),
-            medium = CutCornerShape(topEnd = 12.dp),
-            large = CutCornerShape(topEnd = 18.dp),
+            extraSmall = RoundedCornerShape(4.dp),
+            small = RoundedCornerShape(8.dp),
+            medium = RoundedCornerShape(12.dp),
+            large = CutCornerShape(topEnd = 22.dp),
         ),
         content = content,
     )
 }
-

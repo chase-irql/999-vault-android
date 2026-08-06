@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +46,13 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
@@ -57,6 +65,7 @@ import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,7 +80,9 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -200,9 +211,9 @@ class MainActivity : ComponentActivity() {
 private data class TopDestination(val route: String, val label: String, val icon: ImageVector)
 
 private val topDestinations = listOf(
-    TopDestination("archive", "Archive", Icons.Rounded.Folder),
+    TopDestination("archive", "Archive", Icons.Rounded.Home),
     TopDestination("listen", "Listen", Icons.Rounded.Radio),
-    TopDestination("music", "My Music", Icons.Rounded.LibraryMusic),
+    TopDestination("music", "Library", Icons.Rounded.LibraryMusic),
     TopDestination("search", "Search", Icons.Rounded.Search),
 )
 
@@ -260,9 +271,16 @@ fun VaultApp() {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val destination = backStackEntry?.destination
-    val largeFontNavigation = LocalDensity.current.fontScale >= 1.6f
     var selectedLyrics by remember { mutableStateOf<SearchResult?>(null) }
+    var pendingLyricsSongId by remember { mutableStateOf<Long?>(null) }
     var selectedCloudPlaylistId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(searchState.results, pendingLyricsSongId) {
+        val id = pendingLyricsSongId ?: return@LaunchedEffect
+        searchState.results.firstOrNull { it.song.id == id }?.let { result ->
+            selectedLyrics = result
+            pendingLyricsSongId = null
+        }
+    }
     val playSong: (CanonicalSong) -> Unit = { song ->
         song.streamUrl?.let { uri ->
             val canonicalQueue = catalogState.songs.asSequence()
@@ -342,10 +360,10 @@ fun VaultApp() {
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             Column(Modifier.background(VaultColors.Chrome).windowInsetsPadding(WindowInsets.navigationBars)) {
-                playbackState.currentItem?.let { item ->
-                    MiniPlayer(item = item, playing = playbackState.playing, onToggle = playbackController::toggle, onOpen = { navController.navigate("now-playing") })
-                }
                 if (topLevel) {
+                    playbackState.currentItem?.let { item ->
+                        MobileMiniPlayer(item = item, playing = playbackState.playing, positionMs = playbackState.positionMs, durationMs = playbackState.durationMs, onToggle = playbackController::toggle, onOpen = { navController.navigate("now-playing") })
+                    }
                     NavigationBar(containerColor = VaultColors.Chrome) {
                         topDestinations.forEach { target ->
                             val selected = destination?.hierarchy?.any { it.route == target.route } == true
@@ -360,7 +378,7 @@ fun VaultApp() {
                                 },
                                 icon = { Icon(target.icon, contentDescription = null) },
                                 label = { Text(target.label) },
-                                alwaysShowLabel = !largeFontNavigation,
+                                alwaysShowLabel = false,
                                 modifier = Modifier.semantics { contentDescription = "${target.label} tab${if (selected) ", selected" else ""}" },
                             )
                         }
@@ -371,7 +389,7 @@ fun VaultApp() {
     ) { padding ->
         NavHost(navController = navController, startDestination = "archive", modifier = Modifier.padding(padding)) {
             composable("archive") {
-                ArchiveScreen(
+                MobileArchiveScreen(
                     songs = catalogState.songs,
                     loading = catalogState.loading,
                     offline = catalogState.offline,
@@ -391,9 +409,11 @@ fun VaultApp() {
                 )
             }
             composable("listen") {
-                ListenScreen(
+                MobileListenScreen(
                     state = listenState,
                     radio = radioState,
+                    playing = playbackState.playing,
+                    onToggle = playbackController::toggle,
                     onStart = listenViewModel::start,
                     onMode = listenViewModel::switchMode,
                     onBack = listenViewModel::back,
@@ -404,9 +424,10 @@ fun VaultApp() {
                 )
             }
             composable("music") {
-                MyMusicScreen(
+                MobileLibraryScreen(
                     state = libraryState,
                     cloud = cloudLibraryState,
+                    catalog = catalogState.songs,
                     onCreatePlaylist = libraryViewModel::createPlaylist,
                     onDeletePlaylist = libraryViewModel::deletePlaylist,
                     onCreateCloudPlaylist = cloudLibraryViewModel::createPlaylist,
@@ -419,11 +440,12 @@ fun VaultApp() {
                             playbackController.play(listOf(QueueItem("download:${item.id}", item.name, "On this device", uri, local = true)))
                         }
                     },
+                    onPlaySong = playSong,
                     onNested = navController::navigate,
                 )
             }
             composable("search") {
-                SearchScreen(
+                MobileSearchScreen(
                     state = searchState,
                     onQuery = searchViewModel::setQuery,
                     onMode = searchViewModel::setMode,
@@ -443,6 +465,7 @@ fun VaultApp() {
                     onPause = downloadViewModel::pause,
                     onResume = downloadViewModel::resume,
                     onCancel = downloadViewModel::cancel,
+                    onBrowse = { navController.popBackStack(); navController.navigate("files") },
                     onBack = navController::popBackStack,
                 )
             }
@@ -467,36 +490,46 @@ fun VaultApp() {
                     account = accountState,
                     onSignIn = accountViewModel::signIn,
                     onLogout = accountViewModel::logout,
+                    onCredits = { navController.navigate("credits") },
                     onBack = navController::popBackStack,
                 )
             }
             composable("credits") { CreditsScreen(navController::popBackStack) }
-            composable("wrapped") { WrappedScreen(libraryState, catalogState.songs, navController::popBackStack) }
+            composable("wrapped") { MobileWrappedScreen(libraryState, catalogState.songs, playSong, { navController.popBackStack(); navController.navigate("listen") }, navController::popBackStack) }
             composable("lyrics") { LyricsScreen(selectedLyrics, navController::popBackStack, playSong) }
-            composable("viewer") { ArchiveViewerScreen(viewerState, videoPlayer, navController::popBackStack) }
+            composable("viewer") {
+                ArchiveViewerScreen(
+                    viewerState,
+                    videoPlayer,
+                    onDownload = { viewerState.entry?.let { downloadViewModel.enqueue(it, graph.archiveApi.fileDownloadUrl(it.path)) } },
+                    onBack = navController::popBackStack,
+                )
+            }
             composable("now-playing") {
                 val currentSong = playbackState.currentItem?.canonicalSongId?.let { id -> catalogState.songs.firstOrNull { it.id == id } }
                 val cloudLike = currentSong?.id?.let { id -> cloudLibraryState.projection.cloudLikes.firstOrNull { it.songId == id } }
-                NowPlayingScreen(
+                MobileNowPlayingScreen(
                     state = playbackState,
                     favorite = currentSong?.id in libraryState.favorites.mapNotNull { it.canonicalSongId }.toSet(),
                     cloudLiked = cloudLike?.liked == true,
                     cloudVisible = cloudLibraryState.projection.cloudVisible,
+                    canDownload = currentSong?.archivePath != null,
                     onToggle = playbackController::toggle,
                     onPrevious = playbackController::previous,
                     onNext = playbackController::next,
                     onSeek = playbackController::seekTo,
                     onShuffle = playbackController::setShuffle,
                     onRepeat = playbackController::setRepeat,
-                    onVolume = playbackController::setVolume,
                     onRetry = playbackController::retry,
                     onFavorite = { currentSong?.id?.let(libraryViewModel::toggleFavorite) },
                     onCloudLike = { currentSong?.id?.let { cloudLibraryViewModel.setLike(it, cloudLike?.liked != true) } },
                     onLyrics = {
                         currentSong?.let { song ->
+                            selectedLyrics = SearchResult(song)
+                            pendingLyricsSongId = song.id
                             searchViewModel.setMode(SearchMode.LYRICS)
                             searchViewModel.setQuery(song.title)
-                            navController.navigate("search")
+                            navController.navigate("lyrics")
                         }
                     },
                     onDownload = {
@@ -698,6 +731,7 @@ private fun ArchiveFilesScreen(
     var query by remember { mutableStateOf("") }
     var kindFilter by remember { mutableStateOf<ArchiveKind?>(null) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
+    var selecting by remember { mutableStateOf(false) }
     val visibleItems = remember(state.items, query, kindFilter) {
         state.items.filter { entry ->
             (query.isBlank() || entry.name.contains(query.trim(), ignoreCase = true)) &&
@@ -706,15 +740,20 @@ private fun ArchiveFilesScreen(
     }
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(if (state.path.isBlank()) "Archive Library" else state.path.substringAfterLast('/')) },
+            title = { Text(if (state.path.isBlank()) "Files" else state.path.substringAfterLast('/')) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            actions = {
+                IconButton(onClick = { selecting = !selecting; if (!selecting) selected = emptySet() }) {
+                    Icon(Icons.Rounded.CheckCircle, if (selecting) "Done selecting" else "Select files", tint = if (selecting) VaultColors.Yellow else MaterialTheme.colorScheme.onSurface)
+                }
+            },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
         )
         if (state.offline && state.items.isNotEmpty()) Text("Offline · showing saved file index", color = VaultColors.Yellow, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         OutlinedTextField(
             value = query,
             onValueChange = { query = it.take(120) },
-            label = { Text("Search this folder") },
+            placeholder = { Text("Search") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         )
@@ -727,7 +766,7 @@ private fun ArchiveFilesScreen(
                 FilterChip(selected = kindFilter == kind, onClick = { kindFilter = kind }, label = { Text(kind.name.lowercase().replaceFirstChar(Char::uppercase)) })
             }
         }
-        if (visibleItems.isNotEmpty()) {
+        if (selecting && visibleItems.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
                     val visible = visibleItems.map(ArchiveEntry::path).toSet()
@@ -761,12 +800,20 @@ private fun ArchiveFilesScreen(
                         Icon(if (entry.kind == ArchiveKind.DIRECTORY) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = if (entry.kind == ArchiveKind.DIRECTORY) VaultColors.Yellow else VaultColors.Cyan)
                         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                             Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                            Text(listOfNotNull(entry.kind.name.lowercase().replaceFirstChar(Char::uppercase), entry.sizeBytes?.let(::formatBytes)).joinToString(" · "), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                if (entry.kind == ArchiveKind.DIRECTORY) "Folder" else listOfNotNull(
+                                    entry.kind.name.lowercase().replaceFirstChar(Char::uppercase),
+                                    entry.sizeBytes?.takeIf { it > 0 }?.let(::formatBytes),
+                                ).joinToString(" · "),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                        Checkbox(
-                            checked = entry.path in selected,
-                            onCheckedChange = { checked -> selected = if (checked) selected + entry.path else selected - entry.path },
-                        )
+                        if (selecting) {
+                            Checkbox(
+                                checked = entry.path in selected,
+                                onCheckedChange = { checked -> selected = if (checked) selected + entry.path else selected - entry.path },
+                            )
+                        }
                         if (entry.kind == ArchiveKind.DIRECTORY) {
                             IconButton(onClick = { onDownloadSelection(listOf(entry.path)) }) {
                                 Icon(Icons.Rounded.Download, contentDescription = "Download ${entry.name} recursively")
@@ -1101,7 +1148,8 @@ private fun LyricsScreen(result: SearchResult?, onBack: () -> Unit, onPlay: (Can
 @OptIn(ExperimentalMaterial3Api::class)
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun ArchiveViewerScreen(state: com.vault999.android.viewer.ViewerUiState, videoPlayer: Player?, onBack: () -> Unit) {
+private fun ArchiveViewerScreen(state: com.vault999.android.viewer.ViewerUiState, videoPlayer: Player?, onDownload: () -> Unit, onBack: () -> Unit) {
+    var videoPlaying by remember(state.entry?.path) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(state.entry?.name ?: "Archive viewer", maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -1111,8 +1159,8 @@ private fun ArchiveViewerScreen(state: com.vault999.android.viewer.ViewerUiState
         when {
             state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = VaultColors.Cyan) }
             state.error != null -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("This file cannot be displayed safely.", style = MaterialTheme.typography.titleLarge)
-                Text(state.error, color = MaterialTheme.colorScheme.error)
+                Text("Preview unavailable", style = MaterialTheme.typography.titleLarge)
+                Button(onClick = onDownload) { Text("Download") }
             }
             state.entry?.kind == ArchiveKind.ARTWORK -> AsyncImage(
                 model = state.mediaUrl,
@@ -1124,16 +1172,24 @@ private fun ArchiveViewerScreen(state: com.vault999.android.viewer.ViewerUiState
                 Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
             ) { item { Text(state.text.orEmpty(), style = MaterialTheme.typography.bodyLarge) } }
-            state.entry?.kind == ArchiveKind.VIDEO -> PlayerSurface(player = videoPlayer, modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black))
+            state.entry?.kind == ArchiveKind.VIDEO -> Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black), contentAlignment = Alignment.Center) {
+                PlayerSurface(player = videoPlayer, modifier = Modifier.fillMaxSize())
+                FilledIconButton(onClick = {
+                    videoPlayer?.let { player -> if (videoPlaying) player.pause() else player.play() }
+                    videoPlaying = !videoPlaying
+                }, enabled = videoPlayer != null, modifier = Modifier.size(64.dp)) {
+                    Icon(if (videoPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (videoPlaying) "Pause video" else "Play video")
+                }
+            }
             else -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Unsupported preview", style = MaterialTheme.typography.titleLarge)
-                Text("Android cannot safely preview this format. You can download it from the archive instead.")
+                Text("Preview unavailable", style = MaterialTheme.typography.titleLarge)
+                Button(onClick = onDownload) { Text("Download") }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(
     state: VaultSettings,
@@ -1144,6 +1200,7 @@ private fun SettingsScreen(
     account: AccountUiState,
     onSignIn: () -> Unit,
     onLogout: () -> Unit,
+    onCredits: () -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1174,20 +1231,19 @@ private fun SettingsScreen(
         )
         LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
-                Text("DOWNLOAD DESTINATION", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
-                Text(state.safTreeUri ?: "App-specific Vault storage", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("DOWNLOADS", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                Text(if (state.safTreeUri == null) "Vault storage" else "Selected folder", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                    Button(onClick = { folderPicker.launch(null) }) { Text("Choose folder") }
-                    Button(onClick = { onTree(null) }, enabled = state.safTreeUri != null) { Text("Use app storage") }
+                    Button(onClick = { folderPicker.launch(null) }) { Text("Change") }
+                    Button(onClick = { onTree(null) }, enabled = state.safTreeUri != null) { Text("Reset") }
                 }
-                Text("Folder access is persistable. If Android or the provider revokes it, downloads stop with a permission error and this picker restores access.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
-                Text("TRANSFER AND PLAYBACK NOTIFICATIONS", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                Text("NOTIFICATIONS", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationsGranted) {
-                    Text("Notifications are enabled. Android can show playback controls and active transfer progress.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("On", color = VaultColors.Green)
                 } else {
-                    Text("Allow notifications for playback controls and download progress while the app is not visible. Music and downloads still work if you decline.")
+                    Text("Playback controls and download progress")
                     Button(
                         onClick = { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) },
                         modifier = Modifier.padding(top = 8.dp),
@@ -1196,37 +1252,36 @@ private fun SettingsScreen(
             }
             item {
                 Text("NETWORK", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
-                NetworkPolicy.entries.forEach { policy ->
-                    FilterChip(
-                        selected = state.networkPolicy == policy,
-                        onClick = { onNetwork(policy) },
-                        label = { Text(policy.name.lowercase().replace('_', ' ')) },
-                        modifier = Modifier.padding(end = 6.dp),
-                    )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    NetworkPolicy.entries.forEach { policy ->
+                        FilterChip(
+                            selected = state.networkPolicy == policy,
+                            onClick = { onNetwork(policy) },
+                            label = { Text(when (policy) {
+                                NetworkPolicy.ANY -> "Any network"
+                                NetworkPolicy.WIFI_ONLY -> "Wi-Fi only"
+                                NetworkPolicy.ASK_ON_METERED -> "Ask on mobile data"
+                            }) },
+                        )
+                    }
                 }
             }
             item {
-                Text("CONCURRENT DOWNLOADS", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    (1..4).forEach { value -> FilterChip(selected = state.downloadConcurrency == value, onClick = { onConcurrency(value) }, label = { Text(value.toString()) }) }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Reduce motion", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    Switch(checked = state.reducedMotion, onCheckedChange = onReducedMotion)
                 }
-                Text("The Android scheduler may reduce concurrency for battery, thermal, or network conditions.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            item {
-                FilterChip(selected = state.reducedMotion, onClick = { onReducedMotion(!state.reducedMotion) }, label = { Text("Reduce app motion") })
-                Text("System animator and accessibility settings always take priority.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            item {
-                Text("EQUALIZER", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
-                Text("Unavailable until Android reports a safe audio-effect session. Playback never depends on equalizer support.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
                 Text("ACCOUNT", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
                 when (val projection = account.projection) {
                     AccountProjection.SignedOut -> {
-                        Text("Optional account sign-in uses the system browser, PKCE S256, and encrypted Android Keystore storage.")
-                        Button(onClick = onSignIn, enabled = account.configured && !account.working, modifier = Modifier.padding(top = 8.dp)) { Text("Sign in") }
-                        if (!account.configured) Text("Account service origin is not configured in this build. Signed-out music, playlists, downloads, and Wrapped remain available.", color = VaultColors.Yellow)
+                        if (account.configured) {
+                            Text("Sync likes and playlists.")
+                            Button(onClick = onSignIn, enabled = !account.working, modifier = Modifier.padding(top = 8.dp)) { Text("Sign in") }
+                        } else {
+                            Text("Account sync isn’t available", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                     is AccountProjection.SignedIn -> {
                         Text(projection.account.displayName, style = MaterialTheme.typography.titleMedium)
@@ -1236,6 +1291,7 @@ private fun SettingsScreen(
                 }
                 account.message?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) }
             }
+            item { TextButton(onClick = onCredits) { Text("About & credits") } }
         }
     }
 }
@@ -1247,6 +1303,7 @@ private fun DownloadsScreen(
     onPause: (String) -> Unit,
     onResume: (String) -> Unit,
     onCancel: (String) -> Unit,
+    onBrowse: () -> Unit,
     onBack: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -1259,7 +1316,7 @@ private fun DownloadsScreen(
             Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(Icons.Rounded.Download, contentDescription = null, tint = VaultColors.Cyan)
                 Text("No downloads yet", style = MaterialTheme.typography.titleLarge)
-                Text("Use the download action beside an archive file. Transfers remain durable across process recreation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Button(onClick = onBrowse, modifier = Modifier.padding(top = 12.dp)) { Text("Browse files") }
             }
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1565,51 +1622,67 @@ private fun PlaylistEditorScreen(
 ) {
     var editedName by remember(title) { mutableStateOf(title) }
     var editedDescription by remember(description) { mutableStateOf(description) }
-    var songNumber by remember { mutableStateOf("") }
+    var songQuery by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val songsById = remember(catalog) { catalog.associateBy { it.id } }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this playlist?") },
+            confirmButton = { Button(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            actions = { IconButton(onClick = { editing = !editing }) { Icon(Icons.Rounded.Edit, "Edit playlist") } },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
         )
         LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Text(ownership, color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
-                OutlinedTextField(
-                    value = editedName,
-                    onValueChange = { editedName = it.take(80) },
-                    label = { Text("Playlist name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
-                OutlinedTextField(
-                    value = editedDescription,
-                    onValueChange = { editedDescription = it.take(500) },
-                    label = { Text("Description") },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                    Button(onClick = { onSave(editedName, editedDescription) }, enabled = editedName.isNotBlank()) { Text("Save") }
-                    Button(onClick = { onPlay(songIds, false) }, enabled = songIds.isNotEmpty()) { Text("Play") }
-                    Button(onClick = { onPlay(songIds, true) }, enabled = songIds.isNotEmpty()) { Text("Shuffle") }
+                Text("$ownership · ${songIds.size} songs", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilledIconButton(onClick = { onPlay(songIds, false) }, enabled = songIds.isNotEmpty(), modifier = Modifier.size(58.dp)) {
+                        Icon(Icons.Rounded.PlayArrow, "Play playlist")
+                    }
+                    FilledIconButton(onClick = { onPlay(songIds, true) }, enabled = songIds.isNotEmpty(), modifier = Modifier.size(58.dp)) {
+                        Icon(Icons.Rounded.Shuffle, "Shuffle playlist")
+                    }
+                }
+                if (editing) {
+                    OutlinedTextField(editedName, { editedName = it.take(80) }, Modifier.fillMaxWidth(), label = { Text("Name") }, singleLine = true)
+                    OutlinedTextField(editedDescription, { editedDescription = it.take(500) }, Modifier.fillMaxWidth().padding(top = 8.dp), label = { Text("Description") })
+                    Button(onClick = { onSave(editedName, editedDescription); editing = false }, enabled = editedName.isNotBlank(), modifier = Modifier.padding(top = 8.dp)) { Text("Save") }
                 }
                 OutlinedTextField(
-                    value = songNumber,
-                    onValueChange = { songNumber = it.filter(Char::isDigit).take(12) },
-                    label = { Text("Canonical song ID") },
+                    value = songQuery,
+                    onValueChange = { songQuery = it.take(80) },
+                    placeholder = { Text("Add songs") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, null) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                )
-                val candidate = songNumber.toLongOrNull()?.let(songsById::get)
-                Button(
-                    onClick = { candidate?.id?.let { onSongs(songIds + it); songNumber = "" } },
-                    enabled = candidate != null && candidate.id !in songIds,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                ) { Text(candidate?.let { "Add ${it.title}" } ?: "Enter a trusted catalog ID") }
+                )
+            }
+            if (songQuery.isNotBlank()) {
+                val matches = catalog.filter { song ->
+                    song.id !in songIds && (song.title.contains(songQuery, true) || song.artist.contains(songQuery, true))
+                }.take(6)
+                items(matches, key = { "add-song:${it.id}" }) { song ->
+                    Row(Modifier.fillMaxWidth().clickable { onSongs(songIds + song.id); songQuery = "" }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.MusicNote, null, tint = VaultColors.Cyan)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                            Text(song.artist, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(Icons.Rounded.Add, "Add ${song.title}")
+                    }
+                }
             }
             if (songIds.isEmpty()) {
-                item { Text("This playlist has no songs yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                item { Text("No songs yet", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
                 items(songIds.size, key = { "playlist-song:${songIds[it]}" }) { index ->
                     val songId = songIds[index]
@@ -1618,26 +1691,26 @@ private fun PlaylistEditorScreen(
                         Text(song?.title ?: "Song $songId", style = MaterialTheme.typography.titleMedium)
                         Text(song?.artist ?: "Canonical ID $songId", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                            Button(onClick = {
+                            IconButton(onClick = {
                                 val reordered = songIds.toMutableList()
                                 val previous = reordered[index - 1]
                                 reordered[index - 1] = reordered[index]
                                 reordered[index] = previous
                                 onSongs(reordered)
-                            }, enabled = index > 0) { Text("Up") }
-                            Button(onClick = {
+                            }, enabled = index > 0) { Icon(Icons.Rounded.ArrowUpward, "Move ${song?.title ?: "song"} up") }
+                            IconButton(onClick = {
                                 val reordered = songIds.toMutableList()
                                 val next = reordered[index + 1]
                                 reordered[index + 1] = reordered[index]
                                 reordered[index] = next
                                 onSongs(reordered)
-                            }, enabled = index < songIds.lastIndex) { Text("Down") }
-                            Button(onClick = { onSongs(songIds.filterNot { it == songId }) }) { Text("Remove") }
+                            }, enabled = index < songIds.lastIndex) { Icon(Icons.Rounded.ArrowDownward, "Move ${song?.title ?: "song"} down") }
+                            IconButton(onClick = { onSongs(songIds.filterNot { it == songId }) }) { Icon(Icons.Rounded.Delete, "Remove ${song?.title ?: "song"}") }
                         }
                     }
                 }
             }
-            item { Button(onClick = onDelete, modifier = Modifier.fillMaxWidth()) { Text("Delete playlist") } }
+            item { TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete playlist", color = MaterialTheme.colorScheme.error) } }
         }
     }
 }

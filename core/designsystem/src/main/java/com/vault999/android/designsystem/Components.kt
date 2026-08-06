@@ -37,10 +37,7 @@ fun VaultWordmark(modifier: Modifier = Modifier) {
             Text("9", color = VaultColors.Canvas, style = MaterialTheme.typography.titleLarge)
         }
         Spacer(Modifier.width(10.dp))
-        Column {
-            Text("999 VAULT", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
-            Text("JUICE WRLD ARCHIVE", style = MaterialTheme.typography.labelLarge, color = VaultColors.Cyan)
-        }
+        Text("999 VAULT", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
     }
 }
 
@@ -69,7 +66,7 @@ fun VaultTrackRow(
         Column(Modifier.weight(1f)) {
             Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
             Text(metadata, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(status, maxLines = 1, color = VaultColors.Green, style = MaterialTheme.typography.labelLarge)
+            if (status.isNotBlank()) Text(status, maxLines = 1, color = VaultColors.Green, style = MaterialTheme.typography.labelLarge)
         }
         onFavorite?.let { toggle ->
             IconButton(onClick = toggle, modifier = Modifier.size(48.dp)) {
@@ -79,9 +76,6 @@ fun VaultTrackRow(
                     tint = if (favorite) VaultColors.Red else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        IconButton(onClick = onPlay, modifier = Modifier.size(48.dp)) {
-            Icon(Icons.Rounded.PlayArrow, contentDescription = "Play $title", tint = VaultColors.Yellow)
         }
     }
 }
