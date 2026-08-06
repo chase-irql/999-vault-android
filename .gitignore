@@ -11,7 +11,7 @@ local.properties
 .externalNativeBuild/
 .cxx/
 captures/
+dist/
 qa/artifacts/**
 !qa/artifacts/README.md
 .toolchains/
-

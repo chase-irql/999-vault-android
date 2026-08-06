@@ -2,6 +2,8 @@
 
 Native Android client for the JuiceWRLDAPI archive, built with Kotlin, Jetpack Compose, Room, DataStore, Media3, WorkManager/UIDT, OkHttp, and Coil.
 
+Prefer Windows? [999 Vault for desktop](https://github.com/choz-dev/juicewrld-api-vault) provides the companion Electron app with the same account, synced likes and playlists, archive browser, playback, downloads, Listen, radio, Wrapped, and desktop equalizer.
+
 > **Independent project:** 999 Vault is not affiliated with, endorsed by, sponsored by, or operated by the JuiceWRLDAPI team. Music, artwork, names, and trademarks belong to their respective rights holders.
 
 ## Prerequisites
