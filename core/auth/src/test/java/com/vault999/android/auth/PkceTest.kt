@@ -3,6 +3,7 @@ package com.vault999.android.auth
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -47,6 +48,39 @@ class PkceTest {
         assertFalse(first.toString().contains("one-use"))
     }
 
+    @Test fun `persisted pending authorization survives process death and is durably consumed`() {
+        val store = MemoryPendingAuthorizationStore()
+        val pending = PendingAuthorization("persisted", OpaqueSecret.from("verifier-secret"), "challenge", 1_000)
+        AuthorizationStateMachine(store) { pending }.begin(1_000)
+
+        val afterRestart = AuthorizationStateMachine(store)
+        assertTrue(
+            afterRestart.consume("vault999://auth/callback?ticket=one-use&state=persisted", 2_000) is
+                CallbackConsumption.Accepted,
+        )
+        assertEquals(
+            CallbackConsumption.Rejected.NO_PENDING_ATTEMPT,
+            AuthorizationStateMachine(store).consume(
+                "vault999://auth/callback?ticket=one-use&state=persisted",
+                2_000,
+            ),
+        )
+    }
+
+    @Test fun `callback is not accepted when durable consumption fails`() {
+        val store = MemoryPendingAuthorizationStore(failClear = true)
+        val pending = PendingAuthorization("persisted", OpaqueSecret.from("verifier-secret"), "challenge", 1_000)
+        AuthorizationStateMachine(store) { pending }.begin(1_000)
+
+        assertEquals(
+            CallbackConsumption.Rejected.STORAGE_FAILURE,
+            AuthorizationStateMachine(store).consume(
+                "vault999://auth/callback?ticket=one-use&state=persisted",
+                2_000,
+            ),
+        )
+    }
+
     @Test fun `invalid callback does not consume a valid pending browser attempt`() {
         val pending = PendingAuthorization("expected", OpaqueSecret.from("verifier"), "challenge", 1_000)
         val machine = AuthorizationStateMachine { pending }
@@ -76,5 +110,17 @@ class PkceTest {
     fun `rejects callback authority variations`() {
         val pending = PendingAuthorization("expected", OpaqueSecret.from("verifier"), "challenge", 1_000)
         AuthCallbackParser.consume("vault999://auth:443/callback?ticket=x&state=expected", pending, 2_000)
+    }
+}
+
+private class MemoryPendingAuthorizationStore(
+    private val failClear: Boolean = false,
+) : PendingAuthorizationStore {
+    private var pending: PendingAuthorization? = null
+    override fun read(): PendingAuthorization? = pending
+    override fun write(pending: PendingAuthorization) { this.pending = pending }
+    override fun clear() {
+        if (failClear) throw IOException("test failure")
+        pending = null
     }
 }

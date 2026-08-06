@@ -30,4 +30,17 @@ class VaultStorageTest {
             assertTrue("Expected rejection for $value", rejected)
         }
     }
+
+    @Test fun `failed replacement keeps the prior final intact`() {
+        val storage = AppSpecificVaultStorage(temporary.newFolder("replace-rollback"))
+        val final = VaultPath.of("Compilation/song.mp3")
+        storage.openSink(final).use { it.write("prior final".toByteArray()) }
+
+        val failure = runCatching {
+            storage.move(VaultPath.of("Compilation/missing.part"), final, replaceExisting = true)
+        }.exceptionOrNull()
+
+        assertTrue(failure != null)
+        assertArrayEquals("prior final".toByteArray(), storage.openSource(final).use { it.readBytes() })
+    }
 }

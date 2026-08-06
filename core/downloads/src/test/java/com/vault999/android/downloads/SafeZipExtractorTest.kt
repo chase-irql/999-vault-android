@@ -1,5 +1,8 @@
 package com.vault999.android.downloads
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -10,7 +13,12 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.io.IOException
+import java.io.OutputStream
 import java.util.Random
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -77,6 +85,93 @@ class SafeZipExtractorTest {
         assertEquals(0, result.extractedEntries)
         assertEquals(1, result.skippedEntries)
         assertTrue(checkpoints.single().entryComplete)
+    }
+
+    @Test fun `same size completed entry with wrong CRC is replaced instead of skipped`() = runBlocking {
+        val expected = "correct bytes".toByteArray()
+        val archive = zip("Compilation/song.txt" to expected)
+        val root = temporary.newFolder("crc-output")
+        val output = File(root, "Compilation/song.txt")
+        output.parentFile.mkdirs()
+        output.writeBytes("wrong!! bytes".toByteArray())
+        assertEquals(expected.size.toLong(), output.length())
+
+        val result = SafeZipExtractor().extract(
+            archive,
+            AppSpecificVaultStorage(root),
+            completedEntries = setOf("Compilation/song.txt"),
+        )
+
+        assertEquals(1, result.extractedEntries)
+        assertEquals(0, result.skippedEntries)
+        assertArrayEquals(expected, output.readBytes())
+    }
+
+    @Test fun `permission loss during publication preserves prior final and retry archive`() = runBlocking {
+        val archive = zip("Compilation/song.txt" to "replacement".toByteArray())
+        val root = temporary.newFolder("permission-loss-output")
+        val prior = File(root, "Compilation/song.txt")
+        prior.parentFile.mkdirs()
+        prior.writeText("prior final")
+        val backing = AppSpecificVaultStorage(root)
+        val revokedAtPublication = object : VaultStorage by backing {
+            override fun move(source: VaultPath, destination: VaultPath, replaceExisting: Boolean) {
+                throw StoragePermissionLostException("fixture permission revoked")
+            }
+        }
+
+        val failure = runCatching { SafeZipExtractor().extract(archive, revokedAtPublication) }.exceptionOrNull()
+
+        assertTrue(failure is StoragePermissionLostException)
+        assertEquals("prior final", prior.readText())
+        assertTrue(archive.isFile)
+        assertFalse(File(root, "Compilation/.song.txt.vault-part").exists())
+    }
+
+    @Test fun `cancelling blocked extraction closes entry source and destination sink`() = runBlocking {
+        val payload = ByteArray(16 * 1024).also { Random(42).nextBytes(it) }
+        val archive = zip("Compilation/blocked.bin" to payload)
+        val source = BlockingInputStream()
+        val sinkClosed = CountDownLatch(1)
+        val backing = AppSpecificVaultStorage(temporary.newFolder("cancel-output"))
+        val storage = object : VaultStorage by backing {
+            override fun openSink(path: VaultPath, offset: Long): OutputStream =
+                ClosingOutputStream(backing.openSink(path, offset), sinkClosed)
+        }
+        val extractor = SafeZipExtractor(entrySourceFactory = { _, _ -> source })
+
+        val job = launch(Dispatchers.Default) { extractor.extract(archive, storage) }
+        assertTrue(source.readStarted.await(5, TimeUnit.SECONDS))
+        job.cancelAndJoin()
+
+        assertTrue(source.closed.await(5, TimeUnit.SECONDS))
+        assertTrue(sinkClosed.await(5, TimeUnit.SECONDS))
+        assertFalse(job.isActive)
+    }
+
+    @Test fun `cancelling blocked destination write closes both streams`() = runBlocking {
+        val payload = ByteArray(16 * 1024).also { Random(84).nextBytes(it) }
+        val archive = zip("Compilation/blocked-sink.bin" to payload)
+        val sourceClosed = CountDownLatch(1)
+        val sink = BlockingOutputStream()
+        val backing = AppSpecificVaultStorage(temporary.newFolder("cancel-sink-output"))
+        val storage = object : VaultStorage by backing {
+            override fun openSink(path: VaultPath, offset: Long): OutputStream {
+                sink.delegate = backing.openSink(path, offset)
+                return sink
+            }
+        }
+        val extractor = SafeZipExtractor(
+            entrySourceFactory = { zip, entry -> ClosingInputStream(zip.getInputStream(entry), sourceClosed) },
+        )
+
+        val job = launch(Dispatchers.Default) { extractor.extract(archive, storage) }
+        assertTrue(sink.writeStarted.await(5, TimeUnit.SECONDS))
+        job.cancelAndJoin()
+
+        assertTrue(sink.closed.await(5, TimeUnit.SECONDS))
+        assertTrue(sourceClosed.await(5, TimeUnit.SECONDS))
+        assertFalse(job.isActive)
     }
 
     @Test fun `zip64 end records are recognized and extracted`() = runBlocking {
@@ -179,6 +274,82 @@ class SafeZipExtractorTest {
 
     private fun ByteArrayOutputStream.writeLong(value: Long) {
         repeat(8) { write((value ushr (8 * it)).toInt()) }
+    }
+
+    private class BlockingInputStream : InputStream() {
+        val readStarted = CountDownLatch(1)
+        val closed = CountDownLatch(1)
+        private val monitor = Object()
+        private var isClosed = false
+
+        override fun read(): Int {
+            synchronized(monitor) {
+                readStarted.countDown()
+                while (!isClosed) monitor.wait()
+                return -1
+            }
+        }
+
+        override fun close() {
+            synchronized(monitor) {
+                isClosed = true
+                monitor.notifyAll()
+            }
+            closed.countDown()
+        }
+    }
+
+    private class ClosingOutputStream(
+        private val delegate: OutputStream,
+        private val closed: CountDownLatch,
+    ) : OutputStream() {
+        override fun write(value: Int) = delegate.write(value)
+        override fun write(bytes: ByteArray, offset: Int, length: Int) = delegate.write(bytes, offset, length)
+        override fun flush() = delegate.flush()
+        override fun close() {
+            delegate.close()
+            closed.countDown()
+        }
+    }
+
+    private class ClosingInputStream(
+        private val delegate: InputStream,
+        private val closed: CountDownLatch,
+    ) : InputStream() {
+        override fun read(): Int = delegate.read()
+        override fun read(bytes: ByteArray, offset: Int, length: Int): Int = delegate.read(bytes, offset, length)
+        override fun close() {
+            delegate.close()
+            closed.countDown()
+        }
+    }
+
+    private class BlockingOutputStream : OutputStream() {
+        val writeStarted = CountDownLatch(1)
+        val closed = CountDownLatch(1)
+        lateinit var delegate: OutputStream
+        private val monitor = Object()
+        private var isClosed = false
+
+        override fun write(value: Int) = blockUntilClosed()
+        override fun write(bytes: ByteArray, offset: Int, length: Int) = blockUntilClosed()
+
+        private fun blockUntilClosed() {
+            synchronized(monitor) {
+                writeStarted.countDown()
+                while (!isClosed) monitor.wait()
+            }
+            throw IOException("closed")
+        }
+
+        override fun close() {
+            synchronized(monitor) {
+                isClosed = true
+                monitor.notifyAll()
+            }
+            delegate.close()
+            closed.countDown()
+        }
     }
 
     companion object {

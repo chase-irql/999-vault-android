@@ -16,13 +16,17 @@ class AuthSessionManager(
     @Volatile private var visibleProjection: AccountProjection = AccountProjection.SignedOut
     private var session: AccountSession? = null
     private var refreshInFlight: CompletableDeferred<AccountProjection>? = null
+    // Set before attempting durable deletion. This manager can never re-read stale credentials
+    // after logout even when local storage is temporarily unwritable.
+    private var localSignOutTombstone = false
 
     fun projection(): AccountProjection = visibleProjection
 
     suspend fun restoreAtStartup(): AccountProjection {
         val shouldRefresh = mutex.withLock {
+            if (localSignOutTombstone) return@withLock false
             // Keep restoration idempotent while a refresh is in flight.
-            session?.let { return@withLock it.isExpired(nowEpochMs()) }
+            session?.let { return@withLock it.requiresRefresh(nowEpochMs()) }
             val restored = try {
                 store.read()
             } catch (_: IOException) {
@@ -41,7 +45,7 @@ class AuthSessionManager(
                 is SessionReadResult.Loaded -> {
                     session = restored.session
                     visibleProjection = restored.session.onlineProjection()
-                    restored.session.isExpired(nowEpochMs())
+                    restored.session.requiresRefresh(nowEpochMs())
                 }
             }
         }
@@ -49,7 +53,13 @@ class AuthSessionManager(
     }
 
     suspend fun completeSignIn(exchange: CallbackConsumption.Accepted): AccountTransportResult<AccountProjection> {
-        val result = transport.exchange(exchange.callback.ticket, exchange.verifier)
+        val material = exchange.claimForExchange() ?: return AccountTransportResult.AuthenticationRejected
+        val result = transport.exchange(
+            material.ticket,
+            material.state,
+            material.verifier,
+            material.redirectUri,
+        )
         return mutex.withLock {
             when (result) {
                 is AccountTransportResult.Success -> {
@@ -66,13 +76,26 @@ class AuthSessionManager(
     suspend fun accessSession(): SessionAccess {
         val beforeRefresh = mutex.withLock {
             val current = session ?: return@withLock SessionAccess.SignedOut
-            if (!current.isExpired(nowEpochMs())) SessionAccess.Granted(current) else null
+            if (!current.requiresRefresh(nowEpochMs())) SessionAccess.Granted(current) else null
         }
         if (beforeRefresh != null) return beforeRefresh
         refreshExpiredSession()
         return mutex.withLock {
             val current = session ?: return@withLock SessionAccess.SignedOut
-            if (!current.isExpired(nowEpochMs())) {
+            if (!current.requiresRefresh(nowEpochMs())) {
+                SessionAccess.Granted(current)
+            } else {
+                SessionAccess.TemporarilyUnavailable(current.account.copy(cached = true), OFFLINE_CODE)
+            }
+        }
+    }
+
+    /** Performs at most one serialized refresh after an authenticated request returns 401. */
+    suspend fun refreshAfterUnauthorized(rejectedSession: AccountSession): SessionAccess {
+        refreshExpiredSession(force = true, expected = rejectedSession)
+        return mutex.withLock {
+            val current = session ?: return@withLock SessionAccess.SignedOut
+            if (!current.requiresRefresh(nowEpochMs())) {
                 SessionAccess.Granted(current)
             } else {
                 SessionAccess.TemporarilyUnavailable(current.account.copy(cached = true), OFFLINE_CODE)
@@ -85,15 +108,19 @@ class AuthSessionManager(
         val refresh = mutex.withLock {
             val existing = session
             clearLocalSession()
-            existing?.let { current -> current.useRefreshToken { it } }
+            existing?.let { current -> current.useAccessToken { it } }
         }
         if (refresh != null) transport.revoke(refresh)
     }
 
-    private suspend fun refreshExpiredSession(): AccountProjection {
+    private suspend fun refreshExpiredSession(
+        force: Boolean = false,
+        expected: AccountSession? = null,
+    ): AccountProjection {
         val decision = mutex.withLock {
             val existing = session ?: return@withLock RefreshDecision.Current(AccountProjection.SignedOut)
-            if (!existing.isExpired(nowEpochMs())) return@withLock RefreshDecision.Current(existing.onlineProjection())
+            if (expected != null && existing !== expected) return@withLock RefreshDecision.Current(existing.onlineProjection())
+            if (!force && !existing.requiresRefresh(nowEpochMs())) return@withLock RefreshDecision.Current(existing.onlineProjection())
             refreshInFlight?.let { return@withLock RefreshDecision.Await(it) }
             val deferred = CompletableDeferred<AccountProjection>()
             refreshInFlight = deferred
@@ -166,13 +193,20 @@ class AuthSessionManager(
     private fun persistAndPublish(newSession: AccountSession) {
         store.write(newSession, nowEpochMs())
         session = newSession
+        localSignOutTombstone = false
         visibleProjection = newSession.onlineProjection()
     }
 
     private fun clearLocalSession() {
         session = null
         visibleProjection = AccountProjection.SignedOut
-        store.clear()
+        localSignOutTombstone = true
+        try {
+            store.clear()
+        } catch (_: IOException) {
+            // Memory remains authoritatively signed out. AtomicEncryptedSessionStore writes a
+            // durable tombstone before removing the old envelope, so a partial clear is fail-safe.
+        }
     }
 
     private fun setSignedOut(): AccountProjection {
@@ -181,7 +215,8 @@ class AuthSessionManager(
         return visibleProjection
     }
 
-    private fun AccountSession.isExpired(now: Long): Boolean = accessExpiresAtEpochMs <= now
+    private fun AccountSession.requiresRefresh(now: Long): Boolean =
+        accessExpiresAtEpochMs - now <= REFRESH_SAFETY_WINDOW_MS
     private fun AccountSession.onlineProjection(): AccountProjection =
         AccountProjection.SignedIn(account.copy(cached = false), AccountAvailability.ONLINE)
 
@@ -193,5 +228,6 @@ class AuthSessionManager(
 
     private companion object {
         const val OFFLINE_CODE = "refresh_temporarily_unavailable"
+        const val REFRESH_SAFETY_WINDOW_MS = 60_000L
     }
 }

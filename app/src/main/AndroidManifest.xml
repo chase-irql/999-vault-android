@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
 
     <application
@@ -17,6 +19,14 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.Vault999">
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -32,6 +42,13 @@
                 <data android:scheme="vault999" android:host="auth" android:path="/callback" />
             </intent-filter>
         </activity>
+        <!-- Removed by every shipping/test overlay except the generated profileable benchmark variant. -->
+        <activity
+            android:name=".BenchmarkSeedActivity"
+            android:enabled="${benchmarkSeedEnabled}"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            tools:ignore="MissingClass" />
 
         <service
             android:name="com.vault999.android.playback.VaultPlaybackService"
@@ -41,6 +58,14 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+        <service
+            android:name=".downloads.VaultTransferJobService"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            tools:ignore="ExportedService"
+            tools:targetApi="34" />
+        <receiver
+            android:name=".downloads.DownloadActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>
-

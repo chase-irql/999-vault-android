@@ -1,16 +1,23 @@
 package com.vault999.android.downloads
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.Closeable
 import java.io.EOFException
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.charset.Charset
 import java.util.zip.ZipEntry
 import java.util.zip.ZipException
 import java.util.zip.ZipFile
+import java.util.zip.CRC32
 import kotlin.coroutines.coroutineContext
 
 data class ZipSafetyLimits(
@@ -33,6 +40,7 @@ data class ZipEntryPlan(
     val directory: Boolean,
     val compressedBytes: Long,
     val uncompressedBytes: Long,
+    val crc32: Long,
 )
 
 data class ZipArchivePlan(
@@ -66,6 +74,7 @@ class SafeZipExtractor(
     private val limits: ZipSafetyLimits = ZipSafetyLimits(),
     private val bufferBytes: Int = 64 * 1024,
     private val checkpointBytes: Long = 1024L * 1024,
+    private val entrySourceFactory: (ZipFile, ZipEntry) -> InputStream = ZipFile::getInputStream,
 ) {
     init {
         require(bufferBytes in 8 * 1024..1024 * 1024)
@@ -94,6 +103,7 @@ class SafeZipExtractor(
                 val zipEntry = byName[entryPlan.originalName]
                     ?: throw UnsafeArchiveException("ZIP entry is missing after validation")
                 if (zipEntry.isDirectory != entryPlan.directory) throw UnsafeArchiveException("ZIP entry type changed after validation")
+                if (zipEntry.crc != entryPlan.crc32) throw UnsafeArchiveException("ZIP entry CRC changed after validation")
                 if (entryPlan.directory) {
                     destination.createDirectories(entryPlan.outputPath)
                     onCheckpoint(ExtractionCheckpoint(entryPlan.originalName, index, 0, totalWritten, true))
@@ -101,7 +111,8 @@ class SafeZipExtractor(
                 }
                 val existing = destination.inspect(entryPlan.outputPath)
                 if (entryPlan.originalName in completedEntries && existing.exists && !existing.isDirectory &&
-                    existing.size == entryPlan.uncompressedBytes
+                    existing.size == entryPlan.uncompressedBytes &&
+                    existingCrcMatches(destination, entryPlan.outputPath, entryPlan.uncompressedBytes, entryPlan.crc32)
                 ) {
                     skipped++
                     totalWritten = checkedAdd(totalWritten, entryPlan.uncompressedBytes)
@@ -112,54 +123,138 @@ class SafeZipExtractor(
                 }
                 val partial = partialPath(entryPlan.outputPath)
                 destination.delete(partial)
-                var entryWritten = 0L
                 try {
-                    zip.getInputStream(zipEntry).use { source ->
-                        destination.openSink(partial, 0).use { sink ->
-                            val buffer = ByteArray(bufferBytes)
-                            var nextCheckpoint = checkpointBytes
-                            while (true) {
-                                coroutineContext.ensureActive()
-                                val count = source.read(buffer)
-                                if (count < 0) break
-                                if (count == 0) continue
-                                sink.write(buffer, 0, count)
-                                entryWritten = checkedAdd(entryWritten, count.toLong())
-                                if (entryWritten > entryPlan.uncompressedBytes || entryWritten > limits.maxEntryBytes) {
-                                    throw UnsafeArchiveException("Entry expanded beyond its declared size")
-                                }
-                                if (entryWritten >= nextCheckpoint) {
-                                    sink.flush()
-                                    onCheckpoint(
-                                        ExtractionCheckpoint(
-                                            entryPlan.originalName,
-                                            index,
-                                            entryWritten,
-                                            checkedAdd(totalWritten, entryWritten),
-                                            false,
-                                        ),
-                                    )
-                                    nextCheckpoint = saturatingAdd(entryWritten, checkpointBytes)
-                                }
-                            }
-                            sink.flush()
-                        }
-                    }
+                    val copy = copyEntry(zip, zipEntry, entryPlan, destination, partial, index, totalWritten, onCheckpoint)
+                    val entryWritten = copy.bytes
                     if (entryWritten != entryPlan.uncompressedBytes) {
                         throw UnsafeArchiveException("Entry length differs from central-directory metadata")
                     }
+                    if (copy.crc32 != entryPlan.crc32) {
+                        throw UnsafeArchiveException("Entry CRC differs from central-directory metadata")
+                    }
                     destination.move(partial, entryPlan.outputPath, replaceExisting = true)
+                    extracted++
+                    totalWritten = checkedAdd(totalWritten, entryWritten)
+                    if (totalWritten > limits.maxTotalBytes) throw UnsafeArchiveException("Archive exceeded total extraction limit")
+                    onCheckpoint(ExtractionCheckpoint(entryPlan.originalName, index, entryWritten, totalWritten, true))
                 } catch (failure: Throwable) {
                     destination.delete(partial)
                     throw failure
                 }
-                extracted++
-                totalWritten = checkedAdd(totalWritten, entryWritten)
-                if (totalWritten > limits.maxTotalBytes) throw UnsafeArchiveException("Archive exceeded total extraction limit")
-                onCheckpoint(ExtractionCheckpoint(entryPlan.originalName, index, entryWritten, totalWritten, true))
             }
         }
         ExtractionResult(extracted, skipped, totalWritten, plan.zip64)
+    }
+
+    private suspend fun copyEntry(
+        zip: ZipFile,
+        zipEntry: ZipEntry,
+        plan: ZipEntryPlan,
+        destination: VaultStorage,
+        partial: VaultPath,
+        index: Int,
+        totalWritten: Long,
+        onCheckpoint: suspend (ExtractionCheckpoint) -> Unit,
+    ): EntryCopy = coroutineScope {
+        val active = ActiveExtractionResources()
+        val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                active.closeAll()
+            }
+        }
+        try {
+            val source = entrySourceFactory(zip, zipEntry).also(active::add)
+            val sink = destination.openSink(partial, 0).also(active::add)
+            val crc = CRC32()
+            val buffer = ByteArray(bufferBytes)
+            var entryWritten = 0L
+            var nextCheckpoint = checkpointBytes
+            while (true) {
+                coroutineContext.ensureActive()
+                val count = try {
+                    source.read(buffer)
+                } catch (failure: IOException) {
+                    coroutineContext.ensureActive()
+                    throw failure
+                }
+                coroutineContext.ensureActive()
+                if (count < 0) break
+                if (count == 0) continue
+                try {
+                    sink.write(buffer, 0, count)
+                } catch (failure: IOException) {
+                    coroutineContext.ensureActive()
+                    throw failure
+                }
+                coroutineContext.ensureActive()
+                crc.update(buffer, 0, count)
+                entryWritten = checkedAdd(entryWritten, count.toLong())
+                if (entryWritten > plan.uncompressedBytes || entryWritten > limits.maxEntryBytes) {
+                    throw UnsafeArchiveException("Entry expanded beyond its declared size")
+                }
+                if (entryWritten >= nextCheckpoint) {
+                    sink.flush()
+                    onCheckpoint(
+                        ExtractionCheckpoint(
+                            plan.originalName,
+                            index,
+                            entryWritten,
+                            checkedAdd(totalWritten, entryWritten),
+                            false,
+                        ),
+                    )
+                    nextCheckpoint = saturatingAdd(entryWritten, checkpointBytes)
+                }
+            }
+            sink.flush()
+            EntryCopy(entryWritten, crc.value)
+        } finally {
+            watcher.cancel()
+            active.closeAll()
+        }
+    }
+
+    private suspend fun existingCrcMatches(
+        destination: VaultStorage,
+        path: VaultPath,
+        expectedBytes: Long,
+        expectedCrc: Long,
+    ): Boolean = coroutineScope {
+        val active = ActiveExtractionResources()
+        val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                active.closeAll()
+            }
+        }
+        try {
+            val source = destination.openSource(path).also(active::add)
+            val crc = CRC32()
+            val buffer = ByteArray(bufferBytes)
+            var read = 0L
+            while (true) {
+                coroutineContext.ensureActive()
+                val count = try {
+                    source.read(buffer)
+                } catch (failure: IOException) {
+                    coroutineContext.ensureActive()
+                    throw failure
+                }
+                coroutineContext.ensureActive()
+                if (count < 0) break
+                if (count == 0) continue
+                crc.update(buffer, 0, count)
+                read = checkedAdd(read, count.toLong())
+                if (read > expectedBytes) return@coroutineScope false
+            }
+            read == expectedBytes && crc.value == expectedCrc
+        } finally {
+            watcher.cancel()
+            active.closeAll()
+        }
     }
 
     private fun partialPath(finalPath: VaultPath): VaultPath {
@@ -176,6 +271,21 @@ class SafeZipExtractor(
 
     private fun saturatingAdd(left: Long, right: Long): Long =
         if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
+
+    private data class EntryCopy(val bytes: Long, val crc32: Long)
+
+    private class ActiveExtractionResources {
+        private val resources = mutableListOf<Closeable>()
+
+        @Synchronized fun add(resource: Closeable) {
+            resources += resource
+        }
+
+        @Synchronized fun closeAll() {
+            resources.asReversed().forEach { runCatching { it.close() } }
+            resources.clear()
+        }
+    }
 }
 
 private class CentralDirectoryReader(
@@ -213,7 +323,8 @@ private class CentralDirectoryReader(
             file.readUShortLE() // version needed
             val flags = file.readUShortLE()
             file.readUShortLE() // compression method
-            file.skipExact(8) // time/date + crc
+            file.skipExact(4) // modification time/date
+            val crc32 = file.readUIntLE()
             var compressed = file.readUIntLE()
             var uncompressed = file.readUIntLE()
             val nameLength = file.readUShortLE()
@@ -257,7 +368,7 @@ private class CentralDirectoryReader(
                 throw UnsafeArchiveException("Unsafe ZIP entry path: ${failure.message}")
             }
             if (!outputNames.add(output.value)) throw UnsafeArchiveException("ZIP entries collide after path sanitization")
-            plans += ZipEntryPlan(name, output, directoryEntry, compressed, uncompressed)
+            plans += ZipEntryPlan(name, output, directoryEntry, compressed, uncompressed, crc32)
         }
         if (file.filePointer != directoryEnd) throw UnsafeArchiveException("Central-directory length mismatch")
         ZipArchivePlan(plans, total, needsZip64)

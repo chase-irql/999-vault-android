@@ -32,6 +32,7 @@ class AccountSession private constructor(
     }
 
     fun <T> useAccessToken(block: (OpaqueSecret) -> T): T = block(accessToken)
+    suspend fun <T> useAccessTokenSuspending(block: suspend (OpaqueSecret) -> T): T = block(accessToken)
     fun <T> useRefreshToken(block: (OpaqueSecret) -> T): T = block(refreshToken)
     suspend fun <T> useRefreshTokenSuspending(block: suspend (OpaqueSecret) -> T): T = block(refreshToken)
 
@@ -70,7 +71,12 @@ sealed interface AccountTransportResult<out T> {
 }
 
 fun interface TicketExchangeTransport {
-    suspend fun exchange(ticket: OpaqueSecret, verifier: OpaqueSecret): AccountTransportResult<AccountSession>
+    suspend fun exchange(
+        ticket: OpaqueSecret,
+        state: OpaqueSecret,
+        verifier: OpaqueSecret,
+        redirectUri: String,
+    ): AccountTransportResult<AccountSession>
 }
 
 fun interface TokenRefreshTransport {
@@ -78,7 +84,7 @@ fun interface TokenRefreshTransport {
 }
 
 fun interface SessionRevocationTransport {
-    suspend fun revoke(refreshToken: OpaqueSecret): AccountTransportResult<Unit>
+    suspend fun revoke(accessToken: OpaqueSecret): AccountTransportResult<Unit>
 }
 
 fun interface AccountProfileTransport {

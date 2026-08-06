@@ -1,32 +1,53 @@
 package com.vault999.android
 
+import android.Manifest
 import android.os.Bundle
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.content.Intent
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioDeviceCallback
+import android.media.AudioManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
@@ -36,6 +57,7 @@ import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -48,16 +70,20 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -65,6 +91,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -72,9 +99,13 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.lifecycleScope
+import androidx.browser.customtabs.CustomTabsIntent
+import androidx.core.content.ContextCompat
 import com.vault999.android.catalog.CatalogViewModel
 import com.vault999.android.archive.ArchiveViewModel
 import com.vault999.android.search.SearchMode
+import com.vault999.android.search.SearchResult
 import com.vault999.android.search.SearchUiState
 import com.vault999.android.search.SearchViewModel
 import com.vault999.android.designsystem.VaultColors
@@ -82,15 +113,87 @@ import com.vault999.android.designsystem.VaultTheme
 import com.vault999.android.designsystem.VaultTrackRow
 import com.vault999.android.designsystem.VaultWordmark
 import com.vault999.android.model.CanonicalSong
+import com.vault999.android.model.ArchiveEntry
 import com.vault999.android.model.ArchiveKind
 import com.vault999.android.model.QueueItem
+import com.vault999.android.model.SongCategory
 import com.vault999.android.playback.PlaybackController
+import com.vault999.android.viewer.ArchiveViewerViewModel
+import com.vault999.android.music.LibraryUiState
+import com.vault999.android.music.LibraryViewModel
+import com.vault999.android.listen.ListenMode
+import com.vault999.android.listen.ListenUiState
+import com.vault999.android.listen.ListenViewModel
+import com.vault999.android.listen.RadioUiState
+import com.vault999.android.listen.RadioViewModel
+import com.vault999.android.downloads.DownloadViewModel
+import com.vault999.android.model.DownloadJob
+import com.vault999.android.model.DownloadStage
+import com.vault999.android.model.RepeatMode
+import com.vault999.android.model.PlaybackMode
+import com.vault999.android.model.QueueSnapshot
+import com.vault999.android.playback.PlaybackUiState
+import com.vault999.android.settings.SettingsViewModel
+import com.vault999.android.preferences.NetworkPolicy
+import com.vault999.android.preferences.VaultSettings
+import com.vault999.android.account.AccountUiState
+import com.vault999.android.account.AccountViewModel
+import com.vault999.android.account.CloudLibraryUiState
+import com.vault999.android.account.CloudLibraryViewModel
+import com.vault999.android.account.CloudSyncScheduler
+import com.vault999.android.auth.AccountProjection
+import coil3.compose.AsyncImage
+import androidx.media3.common.Player
+import androidx.media3.ui.compose.PlayerSurface
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.flowOf
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { VaultTheme { VaultApp() } }
+        applyQaOrientation(intent)
+        val qaFontScale = intent.qaFontScale()
+        setContent {
+            val currentDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(currentDensity.density, qaFontScale ?: currentDensity.fontScale),
+            ) {
+                VaultTheme { VaultApp() }
+            }
+        }
+        reportFullyDrawn()
+        consumeAuthIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeAuthIntent(intent)
+    }
+
+    private fun consumeAuthIntent(intent: Intent?) {
+        val uri = intent?.dataString ?: return
+        lifecycleScope.launch { (application as VaultApplication).graph.accountRepository.consumeCallback(uri) }
+    }
+
+    private fun applyQaOrientation(intent: Intent?) {
+        if (!BuildConfig.DEBUG) return
+        requestedOrientation = when (intent?.getStringExtra(QA_ORIENTATION_EXTRA)) {
+            "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun Intent?.qaFontScale(): Float? {
+        if (!BuildConfig.DEBUG || this == null || !hasExtra(QA_FONT_SCALE_EXTRA)) return null
+        return getFloatExtra(QA_FONT_SCALE_EXTRA, 1f).takeIf { it in 1f..2f }
+    }
+
+    private companion object {
+        const val QA_ORIENTATION_EXTRA = "com.vault999.android.qa.ORIENTATION"
+        const val QA_FONT_SCALE_EXTRA = "com.vault999.android.qa.FONT_SCALE"
     }
 }
 
@@ -114,8 +217,42 @@ fun VaultApp() {
     val archiveState by archiveViewModel.state.collectAsStateWithLifecycle()
     val searchViewModel: SearchViewModel = viewModel(factory = SearchViewModel.factory(graph.searchRepository))
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
+    val viewerViewModel: ArchiveViewerViewModel = viewModel(factory = ArchiveViewerViewModel.factory(graph.archiveViewerRepository))
+    val viewerState by viewerViewModel.state.collectAsStateWithLifecycle()
+    val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.factory(graph.libraryRepository))
+    val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
+    val selectedDevicePlaylist by libraryViewModel.selectedPlaylist.collectAsStateWithLifecycle()
+    val listenViewModel: ListenViewModel = viewModel(
+        factory = ListenViewModel.factory(if (fixtures.isNotEmpty()) flowOf(fixtures) else graph.catalogRepository.observeFirstPage()),
+    )
+    val listenState by listenViewModel.state.collectAsStateWithLifecycle()
+    val radioViewModel: RadioViewModel = viewModel(factory = RadioViewModel.factory(graph.radioRepository))
+    val radioState by radioViewModel.state.collectAsStateWithLifecycle()
+    val downloadViewModel: DownloadViewModel = viewModel(factory = DownloadViewModel.factory(graph.downloadRepository))
+    val downloadJobs by downloadViewModel.jobs.collectAsStateWithLifecycle()
+    val settingsViewModel: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(graph.preferences))
+    val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
+    val accountViewModel: AccountViewModel = viewModel(factory = AccountViewModel.factory(graph.accountRepository))
+    val accountState by accountViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(accountState.projection) {
+        graph.libraryRepository.setActiveAccountId((accountState.projection as? AccountProjection.SignedIn)?.account?.id)
+    }
+    val cloudLibraryViewModel: CloudLibraryViewModel = viewModel(
+        factory = CloudLibraryViewModel.factory(
+            graph.accountRepository,
+            graph.cloudLibraryRepository,
+            remember(context.applicationContext) { CloudSyncScheduler(context.applicationContext) },
+        ),
+    )
+    val cloudLibraryState by cloudLibraryViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(accountState.browserUrl) {
+        val url = accountState.browserUrl ?: return@LaunchedEffect
+        runCatching { CustomTabsIntent.Builder().build().launchUrl(context, android.net.Uri.parse(url)) }
+        accountViewModel.browserOpened()
+    }
     val playbackController = remember(context.applicationContext) { PlaybackController(context.applicationContext) }
     val playbackState by playbackController.state.collectAsStateWithLifecycle()
+    val videoPlayer by playbackController.videoPlayer.collectAsStateWithLifecycle()
     DisposableEffect(playbackController) {
         playbackController.connect()
         onDispose { playbackController.close() }
@@ -123,13 +260,30 @@ fun VaultApp() {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val destination = backStackEntry?.destination
-    var currentSong by remember { mutableStateOf<CanonicalSong?>(null) }
+    val largeFontNavigation = LocalDensity.current.fontScale >= 1.6f
+    var selectedLyrics by remember { mutableStateOf<SearchResult?>(null) }
+    var selectedCloudPlaylistId by remember { mutableStateOf<String?>(null) }
     val playSong: (CanonicalSong) -> Unit = { song ->
         song.streamUrl?.let { uri ->
-            currentSong = song
-            playbackController.play(
-                listOf(
+            val canonicalQueue = catalogState.songs.asSequence()
+                .filter(CanonicalSong::isPlayable)
+                .sortedWith(compareBy<CanonicalSong> { it.publicNumber }.thenBy { it.id })
+                .map { candidate ->
                     QueueItem(
+                        mediaId = "song:${candidate.id}",
+                        title = candidate.title,
+                        artist = candidate.artist,
+                        uri = requireNotNull(candidate.streamUrl),
+                        artworkUri = candidate.artworkUrl,
+                        durationMs = candidate.durationSeconds?.times(1000),
+                        canonicalSongId = candidate.id,
+                    )
+                }.toList()
+            val index = canonicalQueue.indexOfFirst { it.canonicalSongId == song.id }
+            playbackController.setQueue(
+                QueueSnapshot(
+                    items = canonicalQueue.ifEmpty {
+                        listOf(QueueItem(
                         mediaId = "song:${song.id}",
                         title = song.title,
                         artist = song.artist,
@@ -137,9 +291,48 @@ fun VaultApp() {
                         artworkUri = song.artworkUrl,
                         durationMs = song.durationSeconds?.times(1000),
                         canonicalSongId = song.id,
-                    ),
+                        ))
+                    },
+                    currentIndex = index.coerceAtLeast(0),
+                    playbackMode = PlaybackMode.CATALOG,
                 ),
             )
+        }
+    }
+    LaunchedEffect(listenState.playRequest?.mediaId) {
+        val selected = listenState.playRequest ?: return@LaunchedEffect
+        playbackController.setQueue(
+            QueueSnapshot(
+                items = listOf(selected) + listenState.lookAhead.filterNot { it.mediaId == selected.mediaId },
+                currentIndex = 0,
+                playbackMode = PlaybackMode.LISTEN,
+            ),
+        )
+        listenViewModel.consumePlayRequest()
+    }
+    val openArchiveEntry: (ArchiveEntry) -> Unit = { entry ->
+        when (entry.kind) {
+            ArchiveKind.AUDIO, ArchiveKind.LOSSLESS, ArchiveKind.VIDEO -> {
+                playbackController.play(
+                    listOf(
+                        QueueItem(
+                            mediaId = "archive:${entry.path}",
+                            title = entry.name.substringBeforeLast('.'),
+                            artist = "999 Vault Archive",
+                            uri = graph.archiveApi.fileDownloadUrl(entry.path),
+                        ),
+                    ),
+                )
+                if (entry.kind == ArchiveKind.VIDEO) {
+                    viewerViewModel.open(entry)
+                    navController.navigate("viewer")
+                }
+            }
+            ArchiveKind.ARTWORK, ArchiveKind.TEXT, ArchiveKind.OTHER -> {
+                viewerViewModel.open(entry)
+                navController.navigate("viewer")
+            }
+            ArchiveKind.DIRECTORY -> archiveViewModel.openFolder(entry.path)
         }
     }
     val topLevel = topDestinations.any { target -> destination?.hierarchy?.any { it.route == target.route } == true }
@@ -149,8 +342,8 @@ fun VaultApp() {
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             Column(Modifier.background(VaultColors.Chrome).windowInsetsPadding(WindowInsets.navigationBars)) {
-                currentSong?.let { song ->
-                    MiniPlayer(song = song, playing = playbackState.playing, onToggle = playbackController::toggle, onOpen = { navController.navigate("now-playing") })
+                playbackState.currentItem?.let { item ->
+                    MiniPlayer(item = item, playing = playbackState.playing, onToggle = playbackController::toggle, onOpen = { navController.navigate("now-playing") })
                 }
                 if (topLevel) {
                     NavigationBar(containerColor = VaultColors.Chrome) {
@@ -167,6 +360,7 @@ fun VaultApp() {
                                 },
                                 icon = { Icon(target.icon, contentDescription = null) },
                                 label = { Text(target.label) },
+                                alwaysShowLabel = !largeFontNavigation,
                                 modifier = Modifier.semantics { contentDescription = "${target.label} tab${if (selected) ", selected" else ""}" },
                             )
                         }
@@ -182,35 +376,193 @@ fun VaultApp() {
                     loading = catalogState.loading,
                     offline = catalogState.offline,
                     error = catalogState.error,
+                    healthStatus = catalogState.healthStatus,
+                    totalSongs = catalogState.totalSongs,
+                    categoryCounts = catalogState.categoryCounts,
+                    randomSong = catalogState.randomSong,
+                    discoveryLoading = catalogState.discoveryLoading,
                     onRetry = catalogViewModel::refresh,
+                    onAnother = catalogViewModel::discover,
                     onPlay = playSong,
+                    favoriteSongIds = libraryState.favorites.mapNotNull { it.canonicalSongId }.toSet(),
+                    onFavorite = libraryViewModel::toggleFavorite,
+                    onFullCollection = downloadViewModel::enqueueFullCollection,
                     onNested = navController::navigate,
                 )
             }
-            composable("listen") { ListenScreen(songs = catalogState.songs, onPlay = playSong) }
-            composable("music") { MyMusicScreen(onNested = navController::navigate) }
+            composable("listen") {
+                ListenScreen(
+                    state = listenState,
+                    radio = radioState,
+                    onStart = listenViewModel::start,
+                    onMode = listenViewModel::switchMode,
+                    onBack = listenViewModel::back,
+                    onNext = listenViewModel::next,
+                    onForward = listenViewModel::forward,
+                    onRefreshRadio = radioViewModel::refresh,
+                    onPlayRadio = { radioState.playableStation?.let { playbackController.setQueue(QueueSnapshot(items = listOf(it), currentIndex = 0, playbackMode = PlaybackMode.RADIO)) } },
+                )
+            }
+            composable("music") {
+                MyMusicScreen(
+                    state = libraryState,
+                    cloud = cloudLibraryState,
+                    onCreatePlaylist = libraryViewModel::createPlaylist,
+                    onDeletePlaylist = libraryViewModel::deletePlaylist,
+                    onCreateCloudPlaylist = cloudLibraryViewModel::createPlaylist,
+                    onDeleteCloudPlaylist = cloudLibraryViewModel::deletePlaylist,
+                    onRetryCloud = cloudLibraryViewModel::retrySync,
+                    onOpenDevicePlaylist = { id -> libraryViewModel.selectPlaylist(id); navController.navigate("playlist") },
+                    onOpenCloudPlaylist = { id -> selectedCloudPlaylistId = id; navController.navigate("cloud-playlist") },
+                    onPlayDownloaded = { item ->
+                        item.localUri?.let { uri ->
+                            playbackController.play(listOf(QueueItem("download:${item.id}", item.name, "On this device", uri, local = true)))
+                        }
+                    },
+                    onNested = navController::navigate,
+                )
+            }
             composable("search") {
                 SearchScreen(
                     state = searchState,
                     onQuery = searchViewModel::setQuery,
                     onMode = searchViewModel::setMode,
-                    onPlay = playSong,
+                    onResult = { result ->
+                        if (searchState.mode == SearchMode.LYRICS) {
+                            selectedLyrics = result
+                            navController.navigate("lyrics")
+                        } else {
+                            playSong(result.song)
+                        }
+                    },
                 )
             }
-            composable("downloads") { NestedScreen("Downloads", "Durable transfers, stages, speed, ETA and recovery", Icons.Rounded.Download, navController::popBackStack) }
+            composable("downloads") {
+                DownloadsScreen(
+                    jobs = downloadJobs,
+                    onPause = downloadViewModel::pause,
+                    onResume = downloadViewModel::resume,
+                    onCancel = downloadViewModel::cancel,
+                    onBack = navController::popBackStack,
+                )
+            }
             composable("files") {
                 ArchiveFilesScreen(
                     state = archiveState,
                     onOpenFolder = archiveViewModel::openFolder,
+                    onOpenFile = openArchiveEntry,
+                    onDownload = { entry -> downloadViewModel.enqueue(entry, graph.archiveApi.fileDownloadUrl(entry.path)) },
+                    onDownloadSelection = downloadViewModel::enqueueSelection,
                     onRetry = archiveViewModel::refresh,
                     onBack = { if (archiveState.path.isBlank()) navController.popBackStack() else archiveViewModel.up() },
                 )
             }
-            composable("settings") { NestedScreen("Settings", "Storage, network, appearance, accessibility and account", Icons.Rounded.Settings, navController::popBackStack) }
+            composable("settings") {
+                SettingsScreen(
+                    state = settingsState,
+                    onTree = settingsViewModel::setTree,
+                    onNetwork = settingsViewModel::setNetwork,
+                    onConcurrency = settingsViewModel::setConcurrency,
+                    onReducedMotion = settingsViewModel::setReducedMotion,
+                    account = accountState,
+                    onSignIn = accountViewModel::signIn,
+                    onLogout = accountViewModel::logout,
+                    onBack = navController::popBackStack,
+                )
+            }
             composable("credits") { CreditsScreen(navController::popBackStack) }
-            composable("wrapped") { NestedScreen("Wrapped", "Honest all-time, 30-day and 7-day listening coverage", Icons.Rounded.Favorite, navController::popBackStack) }
+            composable("wrapped") { WrappedScreen(libraryState, catalogState.songs, navController::popBackStack) }
+            composable("lyrics") { LyricsScreen(selectedLyrics, navController::popBackStack, playSong) }
+            composable("viewer") { ArchiveViewerScreen(viewerState, videoPlayer, navController::popBackStack) }
             composable("now-playing") {
-                NowPlayingScreen(currentSong = currentSong, playing = playbackState.playing, onToggle = playbackController::toggle, onBack = navController::popBackStack)
+                val currentSong = playbackState.currentItem?.canonicalSongId?.let { id -> catalogState.songs.firstOrNull { it.id == id } }
+                val cloudLike = currentSong?.id?.let { id -> cloudLibraryState.projection.cloudLikes.firstOrNull { it.songId == id } }
+                NowPlayingScreen(
+                    state = playbackState,
+                    favorite = currentSong?.id in libraryState.favorites.mapNotNull { it.canonicalSongId }.toSet(),
+                    cloudLiked = cloudLike?.liked == true,
+                    cloudVisible = cloudLibraryState.projection.cloudVisible,
+                    onToggle = playbackController::toggle,
+                    onPrevious = playbackController::previous,
+                    onNext = playbackController::next,
+                    onSeek = playbackController::seekTo,
+                    onShuffle = playbackController::setShuffle,
+                    onRepeat = playbackController::setRepeat,
+                    onVolume = playbackController::setVolume,
+                    onRetry = playbackController::retry,
+                    onFavorite = { currentSong?.id?.let(libraryViewModel::toggleFavorite) },
+                    onCloudLike = { currentSong?.id?.let { cloudLibraryViewModel.setLike(it, cloudLike?.liked != true) } },
+                    onLyrics = {
+                        currentSong?.let { song ->
+                            searchViewModel.setMode(SearchMode.LYRICS)
+                            searchViewModel.setQuery(song.title)
+                            navController.navigate("search")
+                        }
+                    },
+                    onDownload = {
+                        currentSong?.archivePath?.let { path ->
+                            downloadViewModel.enqueue(
+                                ArchiveEntry(path = path, name = path.substringAfterLast('/'), kind = ArchiveKind.AUDIO, canonicalSongId = currentSong.id),
+                                graph.archiveApi.fileDownloadUrl(path),
+                            )
+                        }
+                    },
+                    onOpenQueue = { navController.navigate("queue") },
+                    onBack = navController::popBackStack,
+                )
+            }
+            composable("queue") {
+                QueueScreen(
+                    state = playbackState,
+                    onSelect = playbackController::skipTo,
+                    onClear = playbackController::clearQueue,
+                    onBack = navController::popBackStack,
+                )
+            }
+            composable("playlist") {
+                val detail = selectedDevicePlaylist
+                PlaylistEditorScreen(
+                    title = detail?.playlist?.name ?: "Device playlist",
+                    description = detail?.playlist?.description.orEmpty(),
+                    ownership = "On this device",
+                    songIds = detail?.songIds.orEmpty(),
+                    catalog = catalogState.songs,
+                    onSave = { name, description -> detail?.playlist?.id?.let { libraryViewModel.updatePlaylist(it, name, description) } },
+                    onSongs = { songs -> detail?.playlist?.id?.let { libraryViewModel.setPlaylistSongs(it, songs) } },
+                    onDelete = {
+                        detail?.playlist?.id?.let(libraryViewModel::deletePlaylist)
+                        libraryViewModel.selectPlaylist(null)
+                        navController.popBackStack()
+                    },
+                    onPlay = { songs, shuffle -> playPlaylist(songs, catalogState.songs, shuffle, playbackController) },
+                    onBack = { libraryViewModel.selectPlaylist(null); navController.popBackStack() },
+                )
+            }
+            composable("cloud-playlist") {
+                val playlist = cloudLibraryState.projection.cloudPlaylists.firstOrNull { (it.localId ?: it.id) == selectedCloudPlaylistId }
+                PlaylistEditorScreen(
+                    title = playlist?.name ?: "Cloud playlist",
+                    description = playlist?.description.orEmpty(),
+                    ownership = playlist?.syncState?.name?.lowercase()?.replace('_', ' ') ?: "Unavailable",
+                    songIds = playlist?.songIds.orEmpty(),
+                    catalog = catalogState.songs,
+                    onSave = { name, description -> playlist?.let { cloudLibraryViewModel.updatePlaylist(it.localId ?: it.id, name, description) } },
+                    onSongs = { songs ->
+                        playlist?.let { current ->
+                            val localId = current.localId ?: current.id
+                            current.songIds.filterNot(songs::contains).forEach { cloudLibraryViewModel.setPlaylistSong(localId, it, false) }
+                            songs.filterNot(current.songIds::contains).forEach { cloudLibraryViewModel.setPlaylistSong(localId, it, true) }
+                            if (songs.toSet() == current.songIds.toSet() && songs != current.songIds) cloudLibraryViewModel.reorderPlaylist(localId, songs)
+                        }
+                    },
+                    onDelete = {
+                        playlist?.let { cloudLibraryViewModel.deletePlaylist(it.localId ?: it.id) }
+                        selectedCloudPlaylistId = null
+                        navController.popBackStack()
+                    },
+                    onPlay = { songs, shuffle -> playPlaylist(songs, catalogState.songs, shuffle, playbackController) },
+                    onBack = { selectedCloudPlaylistId = null; navController.popBackStack() },
+                )
             }
         }
     }
@@ -222,11 +574,29 @@ private fun ArchiveScreen(
     loading: Boolean,
     offline: Boolean,
     error: String?,
+    healthStatus: String?,
+    totalSongs: Long?,
+    categoryCounts: Map<String, Long>,
+    randomSong: CanonicalSong?,
+    discoveryLoading: Boolean,
     onRetry: () -> Unit,
+    onAnother: () -> Unit,
     onPlay: (CanonicalSong) -> Unit,
+    favoriteSongIds: Set<Long>,
+    onFavorite: (Long) -> Unit,
+    onFullCollection: () -> Unit,
     onNested: (String) -> Unit,
 ) {
-    LazyColumn(Modifier.fillMaxSize()) {
+    var categoryFilter by remember { mutableStateOf<SongCategory?>(null) }
+    var eraFilter by remember { mutableStateOf<String?>(null) }
+    val eras = remember(songs) { songs.mapNotNull { it.era?.name }.distinct().sorted() }
+    val visibleSongs = remember(songs, categoryFilter, eraFilter) {
+        songs.filter { song ->
+            (categoryFilter == null || song.category == categoryFilter) &&
+                (eraFilter == null || song.era?.name == eraFilter)
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
         item {
             Column(Modifier.padding(horizontal = 18.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -237,8 +607,19 @@ private fun ArchiveScreen(
                 Text("THE ARCHIVE, IN YOUR POCKET", style = MaterialTheme.typography.displaySmall)
                 Text("Browse the canonical catalog and the original file tree. Local and cloud ownership always stay explicit.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    MetricCard("4", "CATEGORIES", Modifier.weight(1f))
-                    MetricCard(if (songs.isEmpty()) "OFFLINE" else "LIVE", "CATALOG", Modifier.weight(1f))
+                    MetricCard((categoryCounts.values.count { it > 0 }.takeIf { it > 0 } ?: 4).toString(), "CATEGORIES", Modifier.weight(1f))
+                    MetricCard(totalSongs?.toString() ?: songs.size.toString(), healthStatus?.uppercase() ?: if (songs.isEmpty()) "OFFLINE" else "CATALOG", Modifier.weight(1f))
+                }
+                randomSong?.let { discovery ->
+                    Column(Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised).padding(16.dp)) {
+                        Text("RANDOM FIND", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                        Text(discovery.title, style = MaterialTheme.typography.titleLarge)
+                        Text(discovery.artist, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                            Button(onClick = { onPlay(discovery) }, enabled = discovery.isPlayable) { Text("Play") }
+                            Button(onClick = onAnother, enabled = !discoveryLoading) { Text(if (discoveryLoading) "Loading…" else "Another") }
+                        }
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = { onNested("wrapped") }, modifier = Modifier.weight(1f)) { Text("Wrapped") }
@@ -248,7 +629,32 @@ private fun ArchiveScreen(
                     Icon(Icons.Rounded.Folder, contentDescription = null)
                     Text(" Browse archive files")
                 }
+                Button(onClick = onFullCollection, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Rounded.Download, contentDescription = null)
+                    Text(" Download full Compilation")
+                }
                 Text("CATALOG", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        FilterChip(selected = categoryFilter == null, onClick = { categoryFilter = null }, label = { Text("All") })
+                    }
+                    items(listOf(SongCategory.RELEASED, SongCategory.UNRELEASED, SongCategory.UNSURFACED, SongCategory.SESSION)) { category ->
+                        FilterChip(
+                            selected = categoryFilter == category,
+                            onClick = { categoryFilter = category },
+                            label = { Text(if (category == SongCategory.SESSION) "Sessions" else category.name.lowercase().replaceFirstChar(Char::uppercase)) },
+                        )
+                    }
+                }
+                if (eras.isNotEmpty()) {
+                    Text("ERA", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item { FilterChip(selected = eraFilter == null, onClick = { eraFilter = null }, label = { Text("All eras") }) }
+                        items(eras, key = { "era:$it" }) { era ->
+                            FilterChip(selected = eraFilter == era, onClick = { eraFilter = era }, label = { Text(era) })
+                        }
+                    }
+                }
                 if (loading) Text("Refreshing the live catalog…", color = VaultColors.Cyan)
                 if (offline && songs.isNotEmpty()) Text("Offline · showing saved catalog", color = VaultColors.Yellow)
                 error?.let {
@@ -259,9 +665,19 @@ private fun ArchiveScreen(
         }
         if (songs.isEmpty() && !loading) {
             item { EmptyCatalog() }
+        } else if (visibleSongs.isEmpty() && !loading) {
+            item { Text("No songs in this category are present in the loaded catalog page.", modifier = Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         } else {
-            items(songs, key = { it.id }) { song ->
-                VaultTrackRow(song.publicNumber, song.title, "${song.artist} · ${song.era?.name ?: "Unknown era"}", song.category.name.replace('_', ' '), { onPlay(song) })
+            items(visibleSongs, key = { it.id }) { song ->
+                VaultTrackRow(
+                    number = song.publicNumber,
+                    title = song.title,
+                    metadata = "${song.artist} · ${song.era?.name ?: "Unknown era"}",
+                    status = song.category.name.replace('_', ' '),
+                    onPlay = { onPlay(song) },
+                    favorite = song.id in favoriteSongIds,
+                    onFavorite = { onFavorite(song.id) },
+                )
                 HorizontalDivider(color = VaultColors.SurfaceRaised)
             }
         }
@@ -273,16 +689,57 @@ private fun ArchiveScreen(
 private fun ArchiveFilesScreen(
     state: com.vault999.android.archive.ArchiveUiState,
     onOpenFolder: (String) -> Unit,
+    onOpenFile: (ArchiveEntry) -> Unit,
+    onDownload: (ArchiveEntry) -> Unit,
+    onDownloadSelection: (List<String>) -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
 ) {
+    var query by remember { mutableStateOf("") }
+    var kindFilter by remember { mutableStateOf<ArchiveKind?>(null) }
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    val visibleItems = remember(state.items, query, kindFilter) {
+        state.items.filter { entry ->
+            (query.isBlank() || entry.name.contains(query.trim(), ignoreCase = true)) &&
+                (kindFilter == null || entry.kind == ArchiveKind.DIRECTORY || entry.kind == kindFilter)
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(if (state.path.isBlank()) "Archive Library" else state.path.substringAfterLast('/')) },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") } },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
         )
         if (state.offline && state.items.isNotEmpty()) Text("Offline · showing saved file index", color = VaultColors.Yellow, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it.take(120) },
+            label = { Text("Search this folder") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        LazyRow(
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item { FilterChip(selected = kindFilter == null, onClick = { kindFilter = null }, label = { Text("All") }) }
+            items(listOf(ArchiveKind.AUDIO, ArchiveKind.LOSSLESS, ArchiveKind.ARTWORK, ArchiveKind.VIDEO, ArchiveKind.TEXT)) { kind ->
+                FilterChip(selected = kindFilter == kind, onClick = { kindFilter = kind }, label = { Text(kind.name.lowercase().replaceFirstChar(Char::uppercase)) })
+            }
+        }
+        if (visibleItems.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val visible = visibleItems.map(ArchiveEntry::path).toSet()
+                    selected = if (selected.containsAll(visible)) selected - visible else selected + visible
+                }, modifier = Modifier.weight(1f)) { Text(if (selected.containsAll(visibleItems.map(ArchiveEntry::path))) "Clear visible" else "Select visible") }
+                Button(
+                    onClick = { onDownloadSelection(selected.toList()); selected = emptySet() },
+                    enabled = selected.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("Download ${selected.size}") }
+            }
+        }
         if (state.loading && state.items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = VaultColors.Cyan) }
         } else if (state.error != null && state.items.isEmpty()) {
@@ -292,19 +749,32 @@ private fun ArchiveFilesScreen(
             }
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
-                items(state.items, key = { it.path }) { entry ->
+                items(visibleItems, key = { it.path }) { entry ->
                     Row(
                         Modifier.fillMaxWidth().height(64.dp)
-                            .clickable(enabled = entry.kind == ArchiveKind.DIRECTORY, onClickLabel = if (entry.kind == ArchiveKind.DIRECTORY) "Open ${entry.name}" else null) {
-                                if (entry.kind == ArchiveKind.DIRECTORY) onOpenFolder(entry.path)
+                            .clickable(onClickLabel = if (entry.kind == ArchiveKind.DIRECTORY) "Open ${entry.name}" else "View or play ${entry.name}") {
+                                if (entry.kind == ArchiveKind.DIRECTORY) onOpenFolder(entry.path) else onOpenFile(entry)
                             }
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(if (entry.kind == ArchiveKind.DIRECTORY) Icons.Rounded.Folder else Icons.Rounded.InsertDriveFile, contentDescription = null, tint = if (entry.kind == ArchiveKind.DIRECTORY) VaultColors.Yellow else VaultColors.Cyan)
+                        Icon(if (entry.kind == ArchiveKind.DIRECTORY) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = if (entry.kind == ArchiveKind.DIRECTORY) VaultColors.Yellow else VaultColors.Cyan)
                         Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                             Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                             Text(listOfNotNull(entry.kind.name.lowercase().replaceFirstChar(Char::uppercase), entry.sizeBytes?.let(::formatBytes)).joinToString(" · "), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Checkbox(
+                            checked = entry.path in selected,
+                            onCheckedChange = { checked -> selected = if (checked) selected + entry.path else selected - entry.path },
+                        )
+                        if (entry.kind == ArchiveKind.DIRECTORY) {
+                            IconButton(onClick = { onDownloadSelection(listOf(entry.path)) }) {
+                                Icon(Icons.Rounded.Download, contentDescription = "Download ${entry.name} recursively")
+                            }
+                        } else {
+                            IconButton(onClick = { onDownload(entry) }) {
+                                Icon(Icons.Rounded.Download, contentDescription = "Download ${entry.name}")
+                            }
                         }
                     }
                     HorizontalDivider(color = VaultColors.SurfaceRaised)
@@ -339,36 +809,232 @@ private fun EmptyCatalog() {
 }
 
 @Composable
-private fun ListenScreen(songs: List<CanonicalSong>, onPlay: (CanonicalSong) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        VaultWordmark()
-        Text("Listen", style = MaterialTheme.typography.displaySmall)
-        Text("Eight tracks ahead. Eight recent tracks behind. No immediate repeats.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = { songs.firstOrNull()?.let(onPlay) }, enabled = songs.isNotEmpty()) {
-            Icon(Icons.Rounded.PlayArrow, contentDescription = null)
-            Text(" Start endless listen")
+private fun ListenScreen(
+    state: ListenUiState,
+    radio: RadioUiState,
+    onStart: (ListenMode) -> Unit,
+    onMode: (ListenMode) -> Unit,
+    onBack: () -> Unit,
+    onNext: () -> Unit,
+    onForward: () -> Unit,
+    onRefreshRadio: () -> Unit,
+    onPlayRadio: () -> Unit,
+) {
+    LazyColumn(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item {
+            VaultWordmark()
+            Text("Listen", style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(top = 12.dp))
+            Text("Eight ahead · eight recent · reversible history", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text("999 FM", color = VaultColors.Cyan, style = MaterialTheme.typography.titleLarge)
-        Text("Station status and listener count will remain visibly offline when the live endpoint cannot be reached.")
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(ListenMode.entries, key = { it.name }) { mode ->
+                    FilterChip(
+                        selected = state.mode == mode,
+                        onClick = { onMode(mode) },
+                        label = { Text(mode.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }) },
+                    )
+                }
+            }
+            Button(onClick = { onStart(state.mode) }, enabled = state.catalogReady, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                Text(if (state.current == null) " Start endless listen" else " Restart this mode")
+            }
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
+        }
+        state.current?.let { current ->
+            item {
+                Column(Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised).padding(16.dp)) {
+                    Text("NOW IN LISTEN", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                    Text(current.title, style = MaterialTheme.typography.titleLarge)
+                    Text(current.artist)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        Button(onClick = onBack, enabled = state.canGoBack) { Text("Back") }
+                        Button(onClick = onNext) { Text("Next") }
+                        Button(onClick = onForward, enabled = state.canGoForward) { Text("Forward") }
+                    }
+                }
+            }
+        }
+        if (state.lookAhead.isNotEmpty()) {
+            item { Text("UP NEXT · ${state.lookAhead.size}", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge) }
+            items(state.lookAhead.take(8), key = { "ahead:${it.mediaId}" }) { item -> Text("${item.title} · ${item.artist}") }
+        }
+        if (state.recents.isNotEmpty()) {
+            item { Text("RECENT", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge) }
+            items(state.recents, key = { "recent:${it.mediaId}" }) { item -> Text("${item.title} · ${item.artist}", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        item {
+            HorizontalDivider(color = VaultColors.SurfaceRaised)
+            Text("999 FM", color = VaultColors.Cyan, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 12.dp))
+            when {
+                radio.loading -> CircularProgressIndicator(color = VaultColors.Cyan)
+                radio.station != null -> {
+                    Text(radio.station.nowTitle ?: radio.station.station, style = MaterialTheme.typography.titleMedium)
+                    Text("${radio.station.listenerCount} listeners · ${if (radio.station.isLive) "LIVE" else radio.station.state}")
+                    radio.error?.let { Text(it, color = VaultColors.Yellow) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(onClick = onPlayRadio, enabled = radio.playableStation != null) { Text("Play station") }
+                        Button(onClick = onRefreshRadio, enabled = !radio.refreshing) { Text("Refresh") }
+                    }
+                    if (radio.station.queuePreview.isNotEmpty()) Text("Queue: ${radio.station.queuePreview.take(3).joinToString(" · ")}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                else -> {
+                    Text(radio.error ?: "Radio status unavailable", color = MaterialTheme.colorScheme.error)
+                    Button(onClick = onRefreshRadio) { Text("Retry") }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun MyMusicScreen(onNested: (String) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        VaultWordmark()
-        Text("My Music", style = MaterialTheme.typography.displaySmall)
-        Text("On this device", color = VaultColors.Cyan, style = MaterialTheme.typography.titleLarge)
-        Text("Downloads, favorites, playlists, queue and listening history stay here when you sign out.")
-        Text("Cloud library", color = VaultColors.Cyan, style = MaterialTheme.typography.titleLarge)
-        Text("Sign in optionally to add synced likes, playlists and acknowledged listening events.")
-        Button(onClick = { onNested("downloads") }) { Icon(Icons.Rounded.Download, null); Text(" Downloads") }
+private fun MyMusicScreen(
+    state: LibraryUiState,
+    cloud: CloudLibraryUiState,
+    onCreatePlaylist: (String) -> Unit,
+    onDeletePlaylist: (String) -> Unit,
+    onCreateCloudPlaylist: (String, String) -> Unit,
+    onDeleteCloudPlaylist: (String) -> Unit,
+    onRetryCloud: () -> Unit,
+    onOpenDevicePlaylist: (String) -> Unit,
+    onOpenCloudPlaylist: (String) -> Unit,
+    onPlayDownloaded: (com.vault999.android.music.DownloadedItem) -> Unit,
+    onNested: (String) -> Unit,
+) {
+    var playlistName by remember { mutableStateOf("") }
+    var cloudPlaylistName by remember { mutableStateOf("") }
+    LazyColumn(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item {
+            VaultWordmark()
+            Text("My Music", style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(top = 14.dp))
+            Text("On this device", color = VaultColors.Cyan, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 18.dp))
+            Text("${state.downloads.size} downloads · ${state.favorites.size} favorites · ${state.playlists.size} playlists")
+            Button(onClick = { onNested("downloads") }, modifier = Modifier.padding(top = 10.dp)) {
+                Icon(Icons.Rounded.Download, null)
+                Text(" Downloads")
+            }
+            OutlinedTextField(
+                value = playlistName,
+                onValueChange = { playlistName = it.take(80) },
+                label = { Text("New device playlist") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+            )
+            Button(
+                onClick = { onCreatePlaylist(playlistName); playlistName = "" },
+                enabled = playlistName.isNotBlank(),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) { Text("Create playlist") }
+        }
+        if (state.playlists.isEmpty()) {
+            item { Text("No device playlists yet. Signed-out playlists remain on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        } else {
+            items(state.playlists, key = { it.id }) { playlist ->
+                Column(Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised).clickable { onOpenDevicePlaylist(playlist.id) }.padding(14.dp)) {
+                    Text(playlist.name, style = MaterialTheme.typography.titleMedium)
+                    Text(playlist.ownership.replace('_', ' '), color = VaultColors.Cyan, style = MaterialTheme.typography.labelMedium)
+                    if (playlist.id.startsWith("device:")) {
+                        Button(onClick = { onDeletePlaylist(playlist.id) }, modifier = Modifier.padding(top = 8.dp)) { Text("Delete") }
+                    }
+                }
+            }
+        }
+        if (state.downloads.isNotEmpty()) {
+            item { Text("DOWNLOADED AUDIO", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp)) }
+            items(state.downloads, key = { "download:${it.id}" }) { item ->
+                Column(Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised).padding(14.dp)) {
+                    Text(item.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (item.localUri != null) "Ready on this device" else "Saved collection or SAF item",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = { onPlayDownloaded(item) }, enabled = item.localUri != null, modifier = Modifier.padding(top = 8.dp)) {
+                        Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                        Text(if (item.localUri != null) " Play local file" else " Playback unavailable")
+                    }
+                }
+            }
+        }
+        item {
+            Text("Cloud library", color = VaultColors.Cyan, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 12.dp))
+            if (!cloud.projection.cloudVisible) {
+                Text("Sign in is optional. Cloud likes and playlists are hidden while signed out; device records remain available.")
+            } else {
+                Text("${cloud.projection.cloudLikes.count { it.liked }} cloud likes · ${cloud.projection.cloudPlaylists.size} cloud playlists")
+                OutlinedTextField(
+                    value = cloudPlaylistName,
+                    onValueChange = { cloudPlaylistName = it.take(80) },
+                    label = { Text("New cloud playlist") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+                Button(
+                    onClick = { onCreateCloudPlaylist(cloudPlaylistName, ""); cloudPlaylistName = "" },
+                    enabled = cloudPlaylistName.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Create cloud playlist") }
+                cloud.projection.cloudPlaylists.forEach { playlist ->
+                    Column(Modifier.fillMaxWidth().padding(top = 12.dp).background(VaultColors.SurfaceRaised).clickable { onOpenCloudPlaylist(playlist.localId ?: playlist.id) }.padding(14.dp)) {
+                        Text(playlist.name, style = MaterialTheme.typography.titleMedium)
+                        Text(playlist.syncState.name.lowercase().replace('_', ' '), color = when (playlist.syncState.name) {
+                            "SYNCED" -> VaultColors.Green
+                            "ERROR", "CONFLICT" -> MaterialTheme.colorScheme.error
+                            else -> VaultColors.Yellow
+                        })
+                        Text("${playlist.songIds.size} songs · Synced account", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Button(onClick = { onDeleteCloudPlaylist(playlist.localId ?: playlist.id) }, modifier = Modifier.padding(top = 8.dp)) { Text("Delete") }
+                    }
+                }
+                cloud.message?.let { Text(it, color = VaultColors.Yellow, modifier = Modifier.padding(top = 8.dp)) }
+                Button(onClick = onRetryCloud, enabled = !cloud.syncing, modifier = Modifier.padding(top = 8.dp)) {
+                    Text(if (cloud.syncing) "Syncing…" else "Retry cloud sync")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WrappedScreen(state: LibraryUiState, catalog: List<CanonicalSong>, onBack: () -> Unit) {
+    val songsById = remember(catalog) { catalog.associateBy { it.id } }
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Wrapped") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
+        )
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            item {
+                Text("YOUR LISTENING", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                Text("Honest coverage only", style = MaterialTheme.typography.displaySmall)
+                Text("Legacy totals without timestamps are excluded from rolling periods.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            listOf("All time" to state.allTime, "30 days" to state.thirtyDays, "7 days" to state.sevenDays).forEach { (label, summary) ->
+                item {
+                    Column(Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised).padding(18.dp)) {
+                        Text(label, color = VaultColors.Cyan, style = MaterialTheme.typography.titleLarge)
+                        Text("${summary.totalPlays}", color = VaultColors.Yellow, style = MaterialTheme.typography.displaySmall)
+                        Text("credited plays · ${summary.distinctSongs} songs · ${summary.listenedSeconds / 60} minutes")
+                        if (summary.coverageStartEpochMs == null) Text("No timestamped listening events yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        summary.topSongs.take(5).forEachIndexed { index, song ->
+                            Text(
+                                "${index + 1}. ${songsById[song.songId]?.title ?: "Song ${song.songId}"} · ${song.plays} plays",
+                                color = if (index == 0) VaultColors.Yellow else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 6.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun SearchScreen(state: SearchUiState, onQuery: (String) -> Unit, onMode: (SearchMode) -> Unit, onPlay: (CanonicalSong) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize()) {
+private fun SearchScreen(state: SearchUiState, onQuery: (String) -> Unit, onMode: (SearchMode) -> Unit, onResult: (SearchResult) -> Unit) {
+    LazyColumn(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
         item {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 VaultWordmark()
@@ -393,8 +1059,256 @@ private fun SearchScreen(state: SearchUiState, onQuery: (String) -> Unit, onMode
             }
         }
         items(state.results, key = { "${state.mode}:${it.song.id}" }) { result ->
-            VaultTrackRow(result.song.publicNumber, result.song.title, result.excerpt ?: result.song.artist, result.song.category.name.replace('_', ' '), { onPlay(result.song) })
+            VaultTrackRow(
+                result.song.publicNumber,
+                result.song.title,
+                result.excerpt ?: result.song.artist,
+                if (state.mode == SearchMode.LYRICS) "OPEN LYRICS" else result.song.category.name.replace('_', ' '),
+                { onResult(result) },
+            )
             HorizontalDivider(color = VaultColors.SurfaceRaised)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LyricsScreen(result: SearchResult?, onBack: () -> Unit, onPlay: (CanonicalSong) -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(result?.song?.title ?: "Lyrics") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
+            actions = {
+                IconButton(onClick = { result?.song?.let(onPlay) }, enabled = result?.song?.isPlayable == true) {
+                    Icon(Icons.Rounded.PlayArrow, "Play song")
+                }
+            },
+        )
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp)) {
+            item {
+                Text(result?.song?.artist.orEmpty(), color = VaultColors.Cyan, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    result?.fullLyrics?.takeIf(String::isNotBlank) ?: "Full lyrics are unavailable for this result.",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun ArchiveViewerScreen(state: com.vault999.android.viewer.ViewerUiState, videoPlayer: Player?, onBack: () -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(state.entry?.name ?: "Archive viewer", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
+        )
+        when {
+            state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = VaultColors.Cyan) }
+            state.error != null -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("This file cannot be displayed safely.", style = MaterialTheme.typography.titleLarge)
+                Text(state.error, color = MaterialTheme.colorScheme.error)
+            }
+            state.entry?.kind == ArchiveKind.ARTWORK -> AsyncImage(
+                model = state.mediaUrl,
+                contentDescription = state.entry.name,
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            )
+            state.entry?.kind == ArchiveKind.TEXT -> LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
+            ) { item { Text(state.text.orEmpty(), style = MaterialTheme.typography.bodyLarge) } }
+            state.entry?.kind == ArchiveKind.VIDEO -> PlayerSurface(player = videoPlayer, modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black))
+            else -> Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Unsupported preview", style = MaterialTheme.typography.titleLarge)
+                Text("Android cannot safely preview this format. You can download it from the archive instead.")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsScreen(
+    state: VaultSettings,
+    onTree: (String?) -> Unit,
+    onNetwork: (NetworkPolicy) -> Unit,
+    onConcurrency: (Int) -> Unit,
+    onReducedMotion: (Boolean) -> Unit,
+    account: AccountUiState,
+    onSignIn: () -> Unit,
+    onLogout: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    var notificationsGranted by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        notificationsGranted = granted
+    }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }.onSuccess { onTree(uri.toString()) }
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Settings") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
+        )
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item {
+                Text("DOWNLOAD DESTINATION", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                Text(state.safTreeUri ?: "App-specific Vault storage", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    Button(onClick = { folderPicker.launch(null) }) { Text("Choose folder") }
+                    Button(onClick = { onTree(null) }, enabled = state.safTreeUri != null) { Text("Use app storage") }
+                }
+                Text("Folder access is persistable. If Android or the provider revokes it, downloads stop with a permission error and this picker restores access.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                Text("TRANSFER AND PLAYBACK NOTIFICATIONS", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationsGranted) {
+                    Text("Notifications are enabled. Android can show playback controls and active transfer progress.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Text("Allow notifications for playback controls and download progress while the app is not visible. Music and downloads still work if you decline.")
+                    Button(
+                        onClick = { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) { Text("Allow notifications") }
+                }
+            }
+            item {
+                Text("NETWORK", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                NetworkPolicy.entries.forEach { policy ->
+                    FilterChip(
+                        selected = state.networkPolicy == policy,
+                        onClick = { onNetwork(policy) },
+                        label = { Text(policy.name.lowercase().replace('_', ' ')) },
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
+                }
+            }
+            item {
+                Text("CONCURRENT DOWNLOADS", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (1..4).forEach { value -> FilterChip(selected = state.downloadConcurrency == value, onClick = { onConcurrency(value) }, label = { Text(value.toString()) }) }
+                }
+                Text("The Android scheduler may reduce concurrency for battery, thermal, or network conditions.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                FilterChip(selected = state.reducedMotion, onClick = { onReducedMotion(!state.reducedMotion) }, label = { Text("Reduce app motion") })
+                Text("System animator and accessibility settings always take priority.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                Text("EQUALIZER", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                Text("Unavailable until Android reports a safe audio-effect session. Playback never depends on equalizer support.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                Text("ACCOUNT", color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                when (val projection = account.projection) {
+                    AccountProjection.SignedOut -> {
+                        Text("Optional account sign-in uses the system browser, PKCE S256, and encrypted Android Keystore storage.")
+                        Button(onClick = onSignIn, enabled = account.configured && !account.working, modifier = Modifier.padding(top = 8.dp)) { Text("Sign in") }
+                        if (!account.configured) Text("Account service origin is not configured in this build. Signed-out music, playlists, downloads, and Wrapped remain available.", color = VaultColors.Yellow)
+                    }
+                    is AccountProjection.SignedIn -> {
+                        Text(projection.account.displayName, style = MaterialTheme.typography.titleMedium)
+                        Text(if (projection.availability.name == "OFFLINE_CACHED") "Offline · cached account" else "Synced account", color = VaultColors.Cyan)
+                        Button(onClick = onLogout, enabled = !account.working, modifier = Modifier.padding(top = 8.dp)) { Text("Sign out") }
+                    }
+                }
+                account.message?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadsScreen(
+    jobs: List<DownloadJob>,
+    onPause: (String) -> Unit,
+    onResume: (String) -> Unit,
+    onCancel: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Downloads") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
+        )
+        if (jobs.isEmpty()) {
+            Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Icon(Icons.Rounded.Download, contentDescription = null, tint = VaultColors.Cyan)
+                Text("No downloads yet", style = MaterialTheme.typography.titleLarge)
+                Text("Use the download action beside an archive file. Transfers remain durable across process recreation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(jobs, key = { it.id }) { job ->
+                    Column(
+                        Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised)
+                            .semantics { contentDescription = "${job.displayName}, ${job.stage.name.lowercase()}, ${job.bytesCompleted} bytes downloaded" }
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        Text(job.displayName, style = MaterialTheme.typography.titleMedium)
+                        Text(job.stage.name.lowercase().replace('_', ' '), color = when (job.stage) {
+                            DownloadStage.FAILED, DownloadStage.COMPLETED_WITH_ERRORS -> MaterialTheme.colorScheme.error
+                            DownloadStage.COMPLETED -> VaultColors.Green
+                            DownloadStage.PAUSED, DownloadStage.CANCELLED -> VaultColors.Yellow
+                            else -> VaultColors.Cyan
+                        })
+                        val totalBytes = job.bytesTotal
+                        Text(
+                            if (totalBytes != null && totalBytes > 0) "${formatBytes(job.bytesCompleted)} / ${formatBytes(totalBytes)}" else formatBytes(job.bytesCompleted),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        job.currentItem?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        if (job.stage in setOf(DownloadStage.PREPARING, DownloadStage.DOWNLOADING, DownloadStage.EXTRACTING)) {
+                            val speed = job.bytesPerSecond
+                            val eta = job.etaSeconds
+                            Text(
+                                when {
+                                    speed == null -> "Calculating…"
+                                    eta == null -> "${formatBytes(speed)}/s · Calculating…"
+                                    else -> "${formatBytes(speed)}/s · about ${eta}s remaining"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        job.errorCode?.let { Text("Retryable failure: $it", color = MaterialTheme.colorScheme.error) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            when (job.stage) {
+                                DownloadStage.PAUSED, DownloadStage.FAILED, DownloadStage.INTERRUPTED -> Button(onClick = { onResume(job.id) }) { Text("Resume") }
+                                DownloadStage.DOWNLOADING, DownloadStage.PREPARING, DownloadStage.EXTRACTING -> Button(onClick = { onPause(job.id) }) { Text("Pause") }
+                                else -> Unit
+                            }
+                            if (job.stage !in setOf(DownloadStage.COMPLETED, DownloadStage.CANCELLED, DownloadStage.CANCELLING)) {
+                                Button(onClick = { onCancel(job.id) }) { Text("Cancel") }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -403,7 +1317,7 @@ private fun SearchScreen(state: SearchUiState, onQuery: (String) -> Unit, onMode
 @Composable
 private fun NestedScreen(title: String, message: String, icon: ImageVector, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text(title) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome))
+        TopAppBar(title = { Text(title) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome))
         Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Icon(icon, contentDescription = null, tint = VaultColors.Cyan)
             Text(message, style = MaterialTheme.typography.bodyLarge)
@@ -415,7 +1329,7 @@ private fun NestedScreen(title: String, message: String, icon: ImageVector, onBa
 @Composable
 private fun CreditsScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Credits") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome))
+        TopAppBar(title = { Text("Credits") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome))
         Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             VaultWordmark()
             Text("999 Vault is an independent project. It is not affiliated with, endorsed by, sponsored by, or operated by the JuiceWRLDAPI team.")
@@ -426,15 +1340,15 @@ private fun CreditsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun MiniPlayer(song: CanonicalSong, playing: Boolean, onToggle: () -> Unit, onOpen: () -> Unit) {
+private fun MiniPlayer(item: QueueItem, playing: Boolean, onToggle: () -> Unit, onOpen: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().height(68.dp).background(VaultColors.SurfaceRaised).semantics { contentDescription = "Mini player, ${song.title}, ${if (playing) "playing" else "paused"}" },
+        Modifier.fillMaxWidth().height(68.dp).background(VaultColors.SurfaceRaised).semantics { contentDescription = "Mini player, ${item.title}, ${if (playing) "playing" else "paused"}" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
             Column {
-                Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                Text(song.artist, color = VaultColors.Cyan, maxLines = 1)
+                Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                Text(item.artist, color = VaultColors.Cyan, maxLines = 1)
             }
         }
         IconButton(onClick = onOpen) { Icon(Icons.Rounded.MoreVert, "Open Now Playing") }
@@ -443,18 +1357,287 @@ private fun MiniPlayer(song: CanonicalSong, playing: Boolean, onToggle: () -> Un
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun NowPlayingScreen(
+    state: PlaybackUiState,
+    favorite: Boolean,
+    cloudLiked: Boolean,
+    cloudVisible: Boolean,
+    onToggle: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onShuffle: (Boolean) -> Unit,
+    onRepeat: (RepeatMode) -> Unit,
+    onVolume: (Float) -> Unit,
+    onRetry: () -> Unit,
+    onFavorite: () -> Unit,
+    onCloudLike: () -> Unit,
+    onLyrics: () -> Unit,
+    onDownload: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(title = { Text("Now Playing") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome))
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Box(Modifier.fillMaxWidth().heightIn(min = 240.dp, max = 420.dp).background(VaultColors.SurfaceRaised), contentAlignment = Alignment.Center) {
+                val artwork = state.currentItem?.artworkUri
+                if (artwork != null) {
+                    AsyncImage(
+                        model = artwork,
+                        contentDescription = "Artwork for ${state.title}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    )
+                } else {
+                    Icon(Icons.Rounded.MusicNote, contentDescription = "Cover artwork unavailable", tint = VaultColors.Cyan, modifier = Modifier.fillMaxSize(.35f))
+                }
+            }
+            Text(state.title.ifBlank { "Nothing playing" }, style = MaterialTheme.typography.headlineMedium)
+            Text(state.artist.ifBlank { "Choose a track from the archive" }, color = VaultColors.Cyan)
+            val duration = state.durationMs
+            if (duration != null && duration > 0) {
+                Slider(
+                    value = state.positionMs.coerceIn(0, duration).toFloat(),
+                    onValueChangeFinished = {},
+                    onValueChange = { onSeek(it.toLong()) },
+                    valueRange = 0f..duration.toFloat(),
+                    modifier = Modifier.semantics { contentDescription = "Playback position" },
+                )
+                Text("${state.positionMs / 1000}s / ${duration / 1000}s", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilledIconButton(onClick = onPrevious, enabled = state.currentItem != null) { Text("‹") }
+                FilledIconButton(onClick = onToggle, enabled = state.currentItem != null) {
+                    Icon(if (state.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (state.playing) "Pause" else "Play")
+                }
+                FilledIconButton(onClick = onNext, enabled = state.currentItem != null) { Text("›") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilterChip(selected = state.shuffle, onClick = { onShuffle(!state.shuffle) }, label = { Text("Shuffle") })
+                FilterChip(
+                    selected = state.repeatMode != RepeatMode.OFF,
+                    onClick = { onRepeat(if (state.repeatMode == RepeatMode.OFF) RepeatMode.ALL else if (state.repeatMode == RepeatMode.ALL) RepeatMode.ONE else RepeatMode.OFF) },
+                    label = { Text("Repeat ${state.repeatMode.name.lowercase()}") },
+                )
+            }
+            val playbackContext = LocalContext.current
+            var outputLabel by remember(playbackContext) { mutableStateOf(audioOutputLabel(playbackContext)) }
+            DisposableEffect(playbackContext) {
+                val audioManager = playbackContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val callback = object : AudioDeviceCallback() {
+                    override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                        outputLabel = audioOutputLabel(playbackContext)
+                    }
+
+                    override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                        outputLabel = audioOutputLabel(playbackContext)
+                    }
+                }
+                audioManager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+                onDispose { audioManager.unregisterAudioDeviceCallback(callback) }
+            }
+            Text("Output: $outputLabel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("Volume", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Slider(
+                    value = state.volume,
+                    onValueChange = onVolume,
+                    modifier = Modifier.weight(1f).padding(start = 12.dp).semantics { contentDescription = "Playback volume" },
+                )
+                Text("${(state.volume * 100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                FilterChip(selected = favorite, onClick = onFavorite, enabled = state.currentItem?.canonicalSongId != null, label = { Text(if (favorite) "On device" else "Device favorite") }, leadingIcon = { Icon(Icons.Rounded.Favorite, contentDescription = null) })
+                if (cloudVisible) FilterChip(selected = cloudLiked, onClick = onCloudLike, enabled = state.currentItem?.canonicalSongId != null, label = { Text(if (cloudLiked) "Cloud liked" else "Like in cloud") }, leadingIcon = { Icon(Icons.Rounded.Favorite, contentDescription = null) })
+                FilterChip(selected = false, onClick = onLyrics, enabled = state.currentItem?.canonicalSongId != null, label = { Text("Lyrics") })
+                FilterChip(selected = false, onClick = onDownload, enabled = state.currentItem?.canonicalSongId != null, label = { Text("Download") }, leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) })
+                FilterChip(selected = false, onClick = onOpenQueue, enabled = state.queue.isNotEmpty(), label = { Text("Queue") }, leadingIcon = { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null) })
+            }
+            Text("${state.queue.size} in queue · ${state.playbackMode.name.lowercase().replace('_', ' ')}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            state.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
+                Button(onClick = onRetry) { Text("Retry playback") }
+            }
+        }
+    }
+}
+
+private fun audioOutputLabel(context: Context): String {
+    val outputs = (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+        .getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+    val preferred = outputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+        ?: outputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+        ?: outputs.firstOrNull { it.type in setOf(AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET) }
+    return when (preferred?.type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth"
+        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB headset"
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired headset"
+        else -> "System audio"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NowPlayingScreen(currentSong: CanonicalSong?, playing: Boolean, onToggle: () -> Unit, onBack: () -> Unit) {
+private fun QueueScreen(
+    state: PlaybackUiState,
+    onSelect: (Int) -> Unit,
+    onClear: () -> Unit,
+    onBack: () -> Unit,
+) {
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Now Playing") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome))
-        Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Box(Modifier.fillMaxWidth().weight(1f).background(VaultColors.SurfaceRaised), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.MusicNote, contentDescription = "Cover artwork unavailable", tint = VaultColors.Cyan, modifier = Modifier.fillMaxSize(.35f))
+        TopAppBar(
+            title = { Text("Queue") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            actions = { Button(onClick = onClear, enabled = state.queue.isNotEmpty()) { Text("Clear") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
+        )
+        if (state.queue.isEmpty()) {
+            Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null, tint = VaultColors.Cyan)
+                Text("Queue is empty", style = MaterialTheme.typography.titleLarge)
+                Text("Choose a song from Archive, Listen, or 999 FM to start a queue.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(currentSong?.title ?: "Nothing playing", style = MaterialTheme.typography.headlineMedium)
-            Text(currentSong?.artist ?: "Choose a track from the archive", color = VaultColors.Cyan)
-            FilledIconButton(onClick = onToggle, enabled = currentSong != null) { Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play") }
+        } else {
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(state.queue.size, key = { state.queue[it].mediaId }) { index ->
+                    val item = state.queue[index]
+                    Row(
+                        Modifier.fillMaxWidth().clickable(onClickLabel = "Play ${item.title}") { onSelect(index) }.padding(horizontal = 18.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text((index + 1).toString().padStart(2, '0'), color = if (index == state.currentIndex) VaultColors.Yellow else VaultColors.Cyan)
+                        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                            Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+                            Text(item.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (index == state.currentIndex) Text("PLAYING", color = VaultColors.Green, style = MaterialTheme.typography.labelLarge)
+                    }
+                    HorizontalDivider(color = VaultColors.SurfaceRaised)
+                }
+            }
+        }
+    }
+}
+
+private fun playPlaylist(
+    songIds: List<Long>,
+    catalog: List<CanonicalSong>,
+    shuffle: Boolean,
+    controller: PlaybackController,
+) {
+    val byId = catalog.associateBy { it.id }
+    val items = songIds.mapNotNull(byId::get).filter(CanonicalSong::isPlayable).map { song ->
+        QueueItem(
+            mediaId = "song:${song.id}",
+            title = song.title,
+            artist = song.artist,
+            uri = requireNotNull(song.streamUrl),
+            artworkUri = song.artworkUrl,
+            durationMs = song.durationSeconds?.times(1_000),
+            canonicalSongId = song.id,
+        )
+    }
+    if (items.isNotEmpty()) {
+        controller.setQueue(QueueSnapshot(items = items, currentIndex = 0, shuffle = shuffle, playbackMode = PlaybackMode.EXPLICIT_QUEUE))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaylistEditorScreen(
+    title: String,
+    description: String,
+    ownership: String,
+    songIds: List<Long>,
+    catalog: List<CanonicalSong>,
+    onSave: (String, String) -> Unit,
+    onSongs: (List<Long>) -> Unit,
+    onDelete: () -> Unit,
+    onPlay: (List<Long>, Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    var editedName by remember(title) { mutableStateOf(title) }
+    var editedDescription by remember(description) { mutableStateOf(description) }
+    var songNumber by remember { mutableStateOf("") }
+    val songsById = remember(catalog) { catalog.associateBy { it.id } }
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = VaultColors.Chrome),
+        )
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                Text(ownership, color = VaultColors.Cyan, style = MaterialTheme.typography.labelLarge)
+                OutlinedTextField(
+                    value = editedName,
+                    onValueChange = { editedName = it.take(80) },
+                    label = { Text("Playlist name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                OutlinedTextField(
+                    value = editedDescription,
+                    onValueChange = { editedDescription = it.take(500) },
+                    label = { Text("Description") },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    Button(onClick = { onSave(editedName, editedDescription) }, enabled = editedName.isNotBlank()) { Text("Save") }
+                    Button(onClick = { onPlay(songIds, false) }, enabled = songIds.isNotEmpty()) { Text("Play") }
+                    Button(onClick = { onPlay(songIds, true) }, enabled = songIds.isNotEmpty()) { Text("Shuffle") }
+                }
+                OutlinedTextField(
+                    value = songNumber,
+                    onValueChange = { songNumber = it.filter(Char::isDigit).take(12) },
+                    label = { Text("Canonical song ID") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+                val candidate = songNumber.toLongOrNull()?.let(songsById::get)
+                Button(
+                    onClick = { candidate?.id?.let { onSongs(songIds + it); songNumber = "" } },
+                    enabled = candidate != null && candidate.id !in songIds,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text(candidate?.let { "Add ${it.title}" } ?: "Enter a trusted catalog ID") }
+            }
+            if (songIds.isEmpty()) {
+                item { Text("This playlist has no songs yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            } else {
+                items(songIds.size, key = { "playlist-song:${songIds[it]}" }) { index ->
+                    val songId = songIds[index]
+                    val song = songsById[songId]
+                    Column(Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised).padding(14.dp)) {
+                        Text(song?.title ?: "Song $songId", style = MaterialTheme.typography.titleMedium)
+                        Text(song?.artist ?: "Canonical ID $songId", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                            Button(onClick = {
+                                val reordered = songIds.toMutableList()
+                                val previous = reordered[index - 1]
+                                reordered[index - 1] = reordered[index]
+                                reordered[index] = previous
+                                onSongs(reordered)
+                            }, enabled = index > 0) { Text("Up") }
+                            Button(onClick = {
+                                val reordered = songIds.toMutableList()
+                                val next = reordered[index + 1]
+                                reordered[index + 1] = reordered[index]
+                                reordered[index] = next
+                                onSongs(reordered)
+                            }, enabled = index < songIds.lastIndex) { Text("Down") }
+                            Button(onClick = { onSongs(songIds.filterNot { it == songId }) }) { Text("Remove") }
+                        }
+                    }
+                }
+            }
+            item { Button(onClick = onDelete, modifier = Modifier.fillMaxWidth()) { Text("Delete playlist") } }
         }
     }
 }

@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +52,8 @@ fun VaultTrackRow(
     status: String,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
+    favorite: Boolean = false,
+    onFavorite: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -66,6 +70,15 @@ fun VaultTrackRow(
             Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
             Text(metadata, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(status, maxLines = 1, color = VaultColors.Green, style = MaterialTheme.typography.labelLarge)
+        }
+        onFavorite?.let { toggle ->
+            IconButton(onClick = toggle, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = if (favorite) "Remove $title from device favorites" else "Add $title to device favorites",
+                    tint = if (favorite) VaultColors.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         IconButton(onClick = onPlay, modifier = Modifier.size(48.dp)) {
             Icon(Icons.Rounded.PlayArrow, contentDescription = "Play $title", tint = VaultColors.Yellow)
@@ -91,4 +104,3 @@ fun VaultState(
         Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
-

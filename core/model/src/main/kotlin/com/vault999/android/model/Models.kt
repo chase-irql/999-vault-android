@@ -64,6 +64,49 @@ data class Playlist(
 )
 
 @Serializable
+enum class CloudSyncState { SYNCED, PENDING, CONFLICT, ERROR }
+
+@Serializable
+data class CloudLike(
+    val songId: Long,
+    val liked: Boolean,
+    val syncState: CloudSyncState = CloudSyncState.SYNCED,
+) {
+    init { require(songId > 0) { "Cloud likes require a positive canonical song ID" } }
+}
+
+@Serializable
+data class CloudLikesSnapshot(
+    val songIds: Set<Long>,
+    val revision: String,
+)
+
+@Serializable
+data class CloudPlaylist(
+    val id: String,
+    val clientMigrationId: String?,
+    val name: String,
+    val description: String,
+    val coverUrl: String?,
+    val songIds: List<Long>,
+    val revision: String,
+    val createdAtEpochMs: Long,
+    val updatedAtEpochMs: Long,
+    val syncState: CloudSyncState = CloudSyncState.SYNCED,
+    val localId: String? = null,
+) {
+    init {
+        require(id.isNotBlank()) { "Cloud playlist ID cannot be blank" }
+        require(name.length in 1..80) { "Cloud playlist name must contain 1 to 80 characters" }
+        require(description.length <= 500) { "Cloud playlist description exceeds 500 characters" }
+        require(songIds.size <= 10_000 && songIds.all { it > 0 } && songIds.distinct().size == songIds.size) {
+            "Cloud playlist song IDs must be unique positive canonical IDs"
+        }
+        require(revision.isNotBlank()) { "Cloud playlist revision cannot be blank" }
+    }
+}
+
+@Serializable
 data class Account(
     val id: String,
     val displayName: String,
@@ -162,4 +205,3 @@ sealed interface VaultError {
     @Serializable data class CorruptArchive(override val operationId: String) : VaultError
     @Serializable data class AuthenticationRejected(override val operationId: String) : VaultError
 }
-

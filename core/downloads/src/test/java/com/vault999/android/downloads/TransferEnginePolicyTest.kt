@@ -3,9 +3,11 @@ package com.vault999.android.downloads
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
@@ -44,6 +46,30 @@ class TransferEnginePolicyTest {
                 ResumeMetadata("W/\"v1\"", 500, 100),
                 response(206, "bytes 100-499/500", "W/\"v1\""),
             ) is RangeDecision.Restart,
+        )
+    }
+
+    @Test fun `range validation rejects truncated ranges mismatched bodies and changed 416 validators`() {
+        val saved = ResumeMetadata("\"v1\"", 500, 100)
+        assertTrue(
+            HttpRangeValidator.evaluate(saved, response(206, "bytes 100-300/500", "\"v1\"", 201))
+                is RangeDecision.Restart,
+        )
+        assertTrue(
+            HttpRangeValidator.evaluate(saved, response(206, "bytes 100-499/500", "\"v1\"", 399))
+                is RangeDecision.Restart,
+        )
+        assertTrue(
+            HttpRangeValidator.evaluate(
+                ResumeMetadata("\"v1\"", 500, 500),
+                response(416, "bytes */500", "\"v2\"", 0),
+            ) is RangeDecision.Restart,
+        )
+        assertTrue(
+            HttpRangeValidator.evaluate(
+                ResumeMetadata("\"v1\"", 500, 500),
+                response(416, "bytes */500", "\"v1\"", 0),
+            ) is RangeDecision.AlreadyComplete,
         )
     }
 
@@ -101,7 +127,91 @@ class TransferEnginePolicyTest {
         }
     }
 
-    private fun response(status: Int, contentRange: String?, etag: String?): Response = Response.Builder()
+    @Test fun `new coordinator instance recovers process interrupted state exactly once`() = runBlocking {
+        val store = MemoryCheckpointStore()
+        val first = PersistentTransferCoordinator(store, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        val downloading = CompletableDeferred<Unit>()
+        first.enqueue(DurableTransferState("process-recreated", TransferStage.QUEUED, totalBytes = 100)) { state, save ->
+            save(state.copy(stage = TransferStage.DOWNLOADING, completedBytes = 40))
+            downloading.complete(Unit)
+            awaitCancellation()
+        }
+        downloading.await()
+        first.close()
+
+        val second = PersistentTransferCoordinator(store, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        val runs = java.util.concurrent.atomic.AtomicInteger()
+        val completed = CompletableDeferred<Unit>()
+        try {
+            second.recover(
+                mapOf("process-recreated" to DurableTransferOperation { queued, save ->
+                    runs.incrementAndGet()
+                    assertEquals(TransferStage.QUEUED, queued.stage)
+                    assertEquals(40L, queued.completedBytes)
+                    save(queued.copy(stage = TransferStage.DOWNLOADING))
+                    save(queued.copy(stage = TransferStage.COMPLETED, completedBytes = 100))
+                    completed.complete(Unit)
+                }),
+            )
+            completed.await()
+            assertEquals(1, runs.get())
+            assertEquals(TransferStage.COMPLETED, store.load("process-recreated")?.stage)
+        } finally {
+            second.close()
+        }
+    }
+
+    @Test fun `cancel then same ID enqueue rejects stale callbacks from old generation`() = runBlocking {
+        val store = MemoryCheckpointStore()
+        val coordinator = PersistentTransferCoordinator(
+            store,
+            CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        )
+        val oldStarted = CompletableDeferred<Unit>()
+        val allowOldCallback = CompletableDeferred<Unit>()
+        val staleRejected = CompletableDeferred<Boolean>()
+        val newStarted = CompletableDeferred<Unit>()
+        val allowNewCompletion = CompletableDeferred<Unit>()
+        val newCompleted = CompletableDeferred<Unit>()
+        try {
+            coordinator.enqueue(DurableTransferState("same-id", TransferStage.QUEUED, totalBytes = 100)) { state, save ->
+                save(state.copy(stage = TransferStage.DOWNLOADING))
+                oldStarted.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        allowOldCallback.await()
+                        staleRejected.complete(
+                            runCatching {
+                                save(state.copy(stage = TransferStage.COMPLETED, completedBytes = 100))
+                            }.isFailure,
+                        )
+                    }
+                }
+            }
+            oldStarted.await()
+            coordinator.cancel("same-id")
+            coordinator.enqueue(DurableTransferState("same-id", TransferStage.QUEUED, totalBytes = 100)) { state, save ->
+                save(state.copy(stage = TransferStage.DOWNLOADING))
+                newStarted.complete(Unit)
+                allowNewCompletion.await()
+                save(state.copy(stage = TransferStage.COMPLETED, completedBytes = 100))
+                newCompleted.complete(Unit)
+            }
+            newStarted.await()
+            allowOldCallback.complete(Unit)
+            assertTrue(staleRejected.await())
+            assertEquals(TransferStage.DOWNLOADING, store.load("same-id")?.stage)
+            allowNewCompletion.complete(Unit)
+            newCompleted.await()
+            assertEquals(TransferStage.COMPLETED, store.load("same-id")?.stage)
+        } finally {
+            coordinator.close()
+        }
+    }
+
+    private fun response(status: Int, contentRange: String?, etag: String?, bodyBytes: Int = 400): Response = Response.Builder()
         .request(Request.Builder().url("https://example.test/file").build())
         .protocol(Protocol.HTTP_1_1)
         .code(status)
@@ -110,7 +220,7 @@ class TransferEnginePolicyTest {
             if (contentRange != null) header("Content-Range", contentRange)
             if (etag != null) header("ETag", etag)
         }
-        .body(ByteArray(400).toResponseBody())
+        .body(ByteArray(bodyBytes).toResponseBody())
         .build()
 
     private class MemoryCheckpointStore(vararg initial: DurableTransferState) : TransferCheckpointStore {

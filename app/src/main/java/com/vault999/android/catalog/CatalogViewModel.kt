@@ -18,6 +18,11 @@ data class CatalogUiState(
     val loading: Boolean = true,
     val offline: Boolean = false,
     val error: String? = null,
+    val healthStatus: String? = null,
+    val totalSongs: Long? = null,
+    val categoryCounts: Map<String, Long> = emptyMap(),
+    val randomSong: CanonicalSong? = null,
+    val discoveryLoading: Boolean = false,
 )
 
 class CatalogViewModel(
@@ -25,7 +30,7 @@ class CatalogViewModel(
     fixtureSongs: List<CanonicalSong> = emptyList(),
 ) : ViewModel() {
     private val mutable = MutableStateFlow(
-        if (fixtureSongs.isEmpty()) CatalogUiState() else CatalogUiState(songs = fixtureSongs, loading = false),
+        if (fixtureSongs.isEmpty()) CatalogUiState() else CatalogUiState(songs = fixtureSongs, loading = false, totalSongs = fixtureSongs.size.toLong(), randomSong = fixtureSongs.firstOrNull()),
     )
     val state: StateFlow<CatalogUiState> = mutable.asStateFlow()
     private val fixtureMode = fixtureSongs.isNotEmpty()
@@ -46,7 +51,12 @@ class CatalogViewModel(
         viewModelScope.launch {
             mutable.update { it.copy(loading = it.songs.isEmpty(), error = null) }
             runCatching { withContext(Dispatchers.IO) { repository.refresh() } }
-                .onSuccess { mutable.update { state -> state.copy(loading = false, offline = false, error = null) } }
+                .onSuccess {
+                    mutable.update { state -> state.copy(loading = false, offline = false, error = null) }
+                    runCatching { withContext(Dispatchers.IO) { repository.dashboard() } }
+                        .onSuccess { dashboard -> mutable.update { state -> state.copy(healthStatus = dashboard.healthStatus, totalSongs = dashboard.totalSongs, categoryCounts = dashboard.categoryCounts) } }
+                    discover()
+                }
                 .onFailure {
                     mutable.update { state ->
                         state.copy(
@@ -56,6 +66,19 @@ class CatalogViewModel(
                         )
                     }
                 }
+        }
+    }
+
+    fun discover() {
+        if (fixtureMode) {
+            mutable.update { state -> state.copy(randomSong = state.songs.randomOrNull()) }
+            return
+        }
+        viewModelScope.launch {
+            mutable.update { it.copy(discoveryLoading = true) }
+            runCatching { withContext(Dispatchers.IO) { repository.randomSong() } }
+                .onSuccess { song -> mutable.update { it.copy(randomSong = song, discoveryLoading = false) } }
+                .onFailure { mutable.update { it.copy(discoveryLoading = false) } }
         }
     }
 

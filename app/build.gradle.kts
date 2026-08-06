@@ -1,7 +1,11 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.baselineprofile)
 }
+
+val configuredAccountOrigin = providers.gradleProperty("vaultAccountOrigin").orElse("").get()
+val accountOriginLiteral = configuredAccountOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.vault999.android"
@@ -15,6 +19,8 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        manifestPlaceholders["benchmarkSeedEnabled"] = "false"
+        buildConfigField("String", "ACCOUNT_API_ORIGIN", "\"$accountOriginLiteral\"")
     }
 
     buildTypes {
@@ -50,6 +56,14 @@ android {
     testOptions.unitTests.isIncludeAndroidResources = true
 }
 
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        if (variant.name == "nonMinifiedRelease") {
+            variant.manifestPlaceholders.put("benchmarkSeedEnabled", "true")
+        }
+    }
+}
+
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:network"))
@@ -72,6 +86,11 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.okhttp)
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.work.runtime)
+    implementation(libs.androidx.browser)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.androidx.media3.ui.compose)
+    baselineProfile(project(":benchmark"))
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -79,6 +98,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.media3.session)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

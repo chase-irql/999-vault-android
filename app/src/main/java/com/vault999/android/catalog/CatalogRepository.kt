@@ -10,17 +10,49 @@ import com.vault999.android.network.JuiceWrldApiClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+data class CatalogDashboard(
+    val healthy: Boolean,
+    val healthStatus: String,
+    val totalSongs: Long,
+    val categoryCounts: Map<String, Long>,
+)
+
 class CatalogRepository(
     private val dao: SongDao,
     private val api: JuiceWrldApiClient,
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
 ) {
-    fun observeFirstPage(): Flow<List<CanonicalSong>> = dao.observePage(limit = 100, offset = 0).map { entities -> entities.map(SongEntity::asModel) }
+    fun observeFirstPage(): Flow<List<CanonicalSong>> = dao.observePage(limit = MAX_CATALOG_SONGS, offset = 0).map { entities -> entities.map(SongEntity::asModel) }
 
     suspend fun refresh(query: CatalogQuery = CatalogQuery(pageSize = 100)): Int {
-        val page = api.songs(query)
-        dao.upsertAll(page.songs.map { it.asEntity(nowEpochMs()) })
-        return page.songs.size
+        val songsById = linkedMapOf<Long, CanonicalSong>()
+        var pageNumber = query.page
+        repeat(MAX_CATALOG_PAGES) {
+            val page = api.songs(query.copy(page = pageNumber))
+            page.songs.forEach { songsById[it.id] = it }
+            check(songsById.size <= MAX_CATALOG_SONGS) { "Catalog exceeded the Android cache limit" }
+            if (!page.hasNext) {
+                val fetchedAt = nowEpochMs()
+                val ordered = songsById.values.sortedWith(compareBy<CanonicalSong> { it.publicNumber }.thenBy { it.id })
+                dao.replaceAll(ordered.map { it.asEntity(fetchedAt) })
+                return ordered.size
+            }
+            pageNumber++
+        }
+        error("Catalog pagination exceeded $MAX_CATALOG_PAGES pages")
+    }
+
+    suspend fun dashboard(): CatalogDashboard {
+        val health = api.health()
+        val stats = api.stats()
+        return CatalogDashboard(health.healthy, health.status, stats.totalSongs, stats.categoryCounts)
+    }
+
+    suspend fun randomSong(): CanonicalSong? = api.randomRadio().song
+
+    private companion object {
+        const val MAX_CATALOG_PAGES = 100
+        const val MAX_CATALOG_SONGS = 10_000
     }
 }
 
@@ -57,4 +89,3 @@ private fun SongEntity.asModel(): CanonicalSong = CanonicalSong(
     producers = producersJson.split(SEPARATOR).filter(String::isNotBlank),
     streamUrl = streamUrl,
 )
-

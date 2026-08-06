@@ -21,7 +21,8 @@ class ListeningTest {
     @Test fun `short songs credit at half duration`() {
         val tracker = ListeningCreditTracker(2, 20, "queue") { "short" }
         tracker.observe(PlaybackObservation(0, 0, true), 1)
-        val event = tracker.observe(PlaybackObservation(10_000, 10_000, true), 2)
+        assertNull(tracker.observe(PlaybackObservation(5_000, 5_000, true), 2))
+        val event = tracker.observe(PlaybackObservation(10_000, 10_000, true), 3)
         assertEquals("short", event?.id)
     }
 
@@ -33,7 +34,7 @@ class ListeningTest {
         )
         val all = WrappedAggregator.aggregate(events, 300, null)
         assertEquals(2, all.totalPlays)
-        assertEquals(100, all.coverageStartEpochMs)
+        assertEquals(100L, all.coverageStartEpochMs)
         assertEquals(listOf(1L, 2L), all.topSongs.map { it.songId })
     }
 }

@@ -92,6 +92,48 @@ class OkHttpStreamingTransferTest {
         assertFalse(job.isActive)
     }
 
+    @Test fun `changed validator on 416 restarts instead of accepting stale completed bytes`() = runBlocking {
+        val fresh = ByteArray(100) { (it + 1).toByte() }
+        var calls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            calls++
+            if (calls == 1) {
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(416)
+                    .message("Range Not Satisfiable")
+                    .header("Content-Range", "bytes */100")
+                    .header("ETag", "\"new\"")
+                    .body(ByteArray(0).toResponseBody())
+                    .build()
+            } else {
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .header("ETag", "\"new\"")
+                    .body(fresh.toResponseBody())
+                    .build()
+            }
+        }.build()
+        val storage = AppSpecificVaultStorage(temporary.newFolder("changed-validator"))
+        val path = VaultPath.of("complete.bin")
+        storage.openSink(path).use { it.write(ByteArray(100) { 42 }) }
+
+        val result = OkHttpStreamingTransfer(client).download(
+            Request.Builder().url("https://example.test/complete").build(),
+            storage,
+            path,
+            ResumeMetadata("\"old\"", 100, 100),
+        )
+
+        assertEquals(2, calls)
+        assertTrue(result.restartedFromZero)
+        assertArrayEquals(fresh, storage.openSource(path).use { it.readBytes() })
+    }
+
     private class BlockingResponseBody : ResponseBody() {
         val readStarted = CountDownLatch(1)
         val closed = CountDownLatch(1)

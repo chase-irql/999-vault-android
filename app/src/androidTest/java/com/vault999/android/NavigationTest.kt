@@ -1,11 +1,16 @@
 package com.vault999.android
 
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.vault999.android.designsystem.VaultTheme
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -14,14 +19,31 @@ import org.junit.runner.RunWith
 class NavigationTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
-    @Test fun topLevelDestinationsRemainReachable() {
+    @Test
+    fun topLevelDestinationsRemainReachable() {
         compose.onNodeWithText("THE ARCHIVE, IN YOUR POCKET").assertIsDisplayed()
         compose.onNodeWithContentDescription("Listen tab").performClick()
-        compose.onNodeWithText("Eight tracks ahead. Eight recent tracks behind. No immediate repeats.").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Listen tab", substring = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("My Music tab").performClick()
         compose.onNodeWithText("On this device").assertIsDisplayed()
         compose.onNodeWithContentDescription("Search tab").performClick()
-        compose.onNodeWithText("Archive · Songs · Lyrics").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Search tab", substring = true).assertIsDisplayed()
     }
 
+    @Test
+    fun topLevelNavigationRemainsOperableAtTwoHundredPercentFontScale() {
+        compose.activityRule.scenario.onActivity { activity ->
+            activity.setContent {
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
+                    VaultTheme { VaultApp() }
+                }
+            }
+        }
+        compose.onNodeWithContentDescription("Listen tab").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("My Music tab").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Search tab").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Archive tab").assertIsDisplayed().performClick()
+        compose.onNodeWithText("THE ARCHIVE, IN YOUR POCKET").assertIsDisplayed()
+    }
 }

@@ -18,5 +18,5 @@ jobs:
       - uses: android-actions/setup-android@v3
       - run: sdkmanager "platforms;android-37" "build-tools;37.0.0"
       - run: node scripts/validate-parity.mjs
-      - run: ./gradlew clean testDebugUnitTest lintDebug assembleDebug bundleRelease
-
+      - run: ./gradlew clean test testDebugUnitTest lintDebug assembleDebug assembleFixture assembleRelease bundleRelease :benchmark:assemble
+      - run: ./gradlew :app:dependencies --configuration releaseRuntimeClasspath > dependency-report.txt

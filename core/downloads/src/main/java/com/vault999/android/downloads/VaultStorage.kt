@@ -14,6 +14,7 @@ import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.UUID
 
 /** A relative, provider-independent location below a configured vault root. */
 @JvmInline
@@ -185,22 +186,77 @@ class SafVaultStorage(
     }
 
     override fun move(source: VaultPath, destination: VaultPath, replaceExisting: Boolean) {
+        if (source == destination) return
         val sourceUri = find(source) ?: throw java.io.FileNotFoundException(source.value)
+        val sourceParent = findParent(source)
         val destinationParent = ensureParent(destination.segments, includeLast = false)
-        val existing = findChild(destinationParent, destination.segments.last())?.uri
+        val destinationName = destination.segments.last()
+        val existing = findChild(destinationParent, destinationName)?.uri
         if (existing != null) {
             check(replaceExisting) { "Destination exists" }
-            permissionBoundary { DocumentsContract.deleteDocument(resolver, existing) }
         }
-        permissionBoundary {
-            val sourceParent = findParent(source)
-            val moved = DocumentsContract.moveDocument(resolver, sourceUri, sourceParent, destinationParent)
-                ?: error("Provider refused to move document")
-            if (metadata(moved).name != destination.segments.last()) {
-                DocumentsContract.renameDocument(resolver, moved, destination.segments.last())
-                    ?: error("Provider refused to rename document")
+
+        // SAF has no portable atomic replace primitive. Preserve the old final under a temporary
+        // name until the new document has been moved and renamed successfully, then remove it.
+        // Providers which cannot rename the old final fail before publication changes anything.
+        var backup: Uri? = null
+        var moved: Uri = sourceUri
+        try {
+            if (existing != null) {
+                val backupName = uniqueBackupName(destinationParent, destinationName)
+                backup = permissionBoundary {
+                    DocumentsContract.renameDocument(resolver, existing, backupName)
+                        ?: error("Provider refused to protect the existing destination")
+                }
             }
+            if (sourceParent != destinationParent) {
+                moved = permissionBoundary {
+                    DocumentsContract.moveDocument(resolver, sourceUri, sourceParent, destinationParent)
+                        ?: error("Provider refused to move document")
+                }
+            }
+            if (source.segments.last() != destinationName) {
+                moved = permissionBoundary {
+                    DocumentsContract.renameDocument(resolver, moved, destinationName)
+                        ?: error("Provider refused to rename document")
+                }
+            }
+        } catch (publicationFailure: Throwable) {
+            // Best-effort rollback is deliberately non-destructive: never delete the prior final.
+            // A provider may leave the incoming partial in either parent, but the old final is
+            // restored whenever its rename operation remains available.
+            if (sourceParent != destinationParent && moved != sourceUri) {
+                runCatching {
+                    permissionBoundary {
+                        DocumentsContract.moveDocument(resolver, moved, destinationParent, sourceParent)
+                            ?: error("Provider refused to roll back the incoming document")
+                    }
+                }.exceptionOrNull()?.let(publicationFailure::addSuppressed)
+            }
+            backup?.let { protectedFinal ->
+                runCatching {
+                    permissionBoundary {
+                        DocumentsContract.renameDocument(resolver, protectedFinal, destinationName)
+                            ?: error("Provider refused to restore the existing destination")
+                    }
+                }.exceptionOrNull()?.let(publicationFailure::addSuppressed)
+            }
+            throw publicationFailure
         }
+
+        // Publication succeeded. Failure to remove the backup is harmless and leaves a
+        // recoverable duplicate instead of risking loss of the newly published final.
+        backup?.let { protectedFinal ->
+            runCatching { permissionBoundary { DocumentsContract.deleteDocument(resolver, protectedFinal) } }
+        }
+    }
+
+    private fun uniqueBackupName(parent: Uri, destinationName: String): String {
+        repeat(8) {
+            val candidate = ".$destinationName.vault-backup-${UUID.randomUUID()}"
+            if (findChild(parent, candidate) == null) return candidate
+        }
+        error("Cannot allocate a safe replacement backup name")
     }
 
     private fun find(path: VaultPath): Uri? {
@@ -283,10 +339,16 @@ class SafVaultStorage(
         } ?: throw java.io.FileNotFoundException(uri.toString())
     }
 
-    private inline fun <T> permissionBoundary(block: () -> T): T = try {
-        block()
-    } catch (failure: SecurityException) {
-        throw StoragePermissionLostException("Access to the selected folder was revoked", failure)
+    private inline fun <T> permissionBoundary(block: () -> T): T {
+        val persisted = resolver.persistedUriPermissions.any { permission ->
+            permission.uri == treeUri && (permission.isReadPermission || permission.isWritePermission)
+        }
+        if (!persisted) throw StoragePermissionLostException("Access to the selected folder was revoked")
+        return try {
+            block()
+        } catch (failure: SecurityException) {
+            throw StoragePermissionLostException("Access to the selected folder was revoked", failure)
+        }
     }
 
     private data class DocumentMetadata(val uri: Uri, val name: String, val mimeType: String, val size: Long?)

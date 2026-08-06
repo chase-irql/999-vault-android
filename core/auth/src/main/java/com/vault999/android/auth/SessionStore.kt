@@ -41,8 +41,12 @@ class AtomicEncryptedSessionStore(
     private val cipher: SessionEnvelopeCipher,
 ) : SessionStore {
     private val lock = Any()
+    private val tombstone: Path = file.resolveSibling("${file.fileName}.signed-out")
 
     override fun read(): SessionReadResult = synchronized(lock) {
+        // The tombstone is authoritative even if an earlier session envelope remains after a
+        // partial clear. This prevents stale credentials from returning after process death.
+        if (Files.exists(tombstone)) return@synchronized SessionReadResult.Missing
         if (!Files.exists(file)) return@synchronized SessionReadResult.Missing
         val encoded = try {
             val size = Files.size(file)
@@ -89,6 +93,9 @@ class AtomicEncryptedSessionStore(
                 channel.force(true)
             }
             Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            // Remove the signed-out marker only after a complete new session is durable.
+            Files.deleteIfExists(tombstone)
+            Files.deleteIfExists(tombstone.resolveSibling("${tombstone.fileName}.tmp"))
         } finally {
             encoded.fill(0)
             Files.deleteIfExists(temporary)
@@ -97,6 +104,24 @@ class AtomicEncryptedSessionStore(
     }
 
     override fun clear(): Unit = synchronized(lock) {
+        Files.createDirectories(file.toAbsolutePath().parent)
+        val markerTemporary = tombstone.resolveSibling("${tombstone.fileName}.tmp")
+        try {
+            FileChannel.open(
+                markerTemporary,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE,
+            ).use { channel ->
+                val buffer = ByteBuffer.wrap(TOMBSTONE_BYTES)
+                while (buffer.hasRemaining()) channel.write(buffer)
+                channel.force(true)
+            }
+            Files.move(markerTemporary, tombstone, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(markerTemporary)
+        }
+        // Deletion is cleanup only: the already-durable marker makes any old envelope unreadable.
         Files.deleteIfExists(file)
         Files.deleteIfExists(file.resolveSibling("${file.fileName}.tmp"))
         Unit
@@ -146,6 +171,7 @@ class AtomicEncryptedSessionStore(
         const val MIN_FILE_BYTES = HEADER_BYTES + 12 + 16
         const val MAX_CIPHERTEXT_BYTES = 512 * 1024
         const val MAX_FILE_BYTES = HEADER_BYTES + 32 + MAX_CIPHERTEXT_BYTES
+        val TOMBSTONE_BYTES = byteArrayOf(0x39, 0x39, 0x39, 0x00)
     }
 }
 

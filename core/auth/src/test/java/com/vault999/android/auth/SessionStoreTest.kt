@@ -58,6 +58,23 @@ class SessionStoreTest {
         assertFalse(Files.exists(file.resolveSibling("account.session.tmp")))
     }
 
+    @Test fun `durable tombstone masks a stale envelope until a new session is committed`() {
+        val file = temporaryFolder.root.toPath().resolve("account.session")
+        val store = AtomicEncryptedSessionStore(file, DeterministicAesGcmCipher())
+        store.write(session(access = "stale"), 1)
+        val staleEnvelope = Files.readAllBytes(file)
+
+        store.clear()
+        // Simulate cleanup failure or stale bytes returning after the durable sign-out marker.
+        Files.write(file, staleEnvelope)
+        assertEquals(SessionReadResult.Missing, store.read())
+
+        store.write(session(access = "fresh"), 2)
+        val loaded = store.read() as SessionReadResult.Loaded
+        loaded.session.useAccessToken { it.use { value -> assertEquals("fresh", value) } }
+        assertFalse(Files.exists(file.resolveSibling("account.session.signed-out")))
+    }
+
     private fun session(access: String = "access", refresh: String = "refresh") = AccountSession.create(
         account = Account("account-1", "Listener", "listener"),
         accessToken = access,

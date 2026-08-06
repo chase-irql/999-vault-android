@@ -21,7 +21,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class SearchMode { SONGS, LYRICS }
-data class SearchResult(val song: CanonicalSong, val excerpt: String? = null)
+data class SearchResult(
+    val song: CanonicalSong,
+    val excerpt: String? = null,
+    /** Bounded, normalized plain text from the API; never interpreted as HTML. */
+    val fullLyrics: String? = null,
+)
 data class SearchUiState(
     val query: String = "",
     val mode: SearchMode = SearchMode.SONGS,
@@ -33,7 +38,9 @@ data class SearchUiState(
 class SearchRepository(private val api: JuiceWrldApiClient) {
     suspend fun search(mode: SearchMode, query: String): List<SearchResult> = when (mode) {
         SearchMode.SONGS -> api.songs(CatalogQuery(pageSize = 30, search = query)).songs.map(::SearchResult)
-        SearchMode.LYRICS -> api.lyricsSearch(LyricsSearchQuery(query, pageSize = 30)).hits.map { SearchResult(it.song, it.excerpt) }
+        SearchMode.LYRICS -> api.lyricsSearch(LyricsSearchQuery(query, pageSize = 30)).hits.map {
+            SearchResult(it.song, it.excerpt, it.lyrics)
+        }
     }
 }
 

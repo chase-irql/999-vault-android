@@ -4,11 +4,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 enum class TransferStage {
     QUEUED,
@@ -94,55 +97,88 @@ class PersistentTransferCoordinator(
     private val store: TransferCheckpointStore,
     private val scope: CoroutineScope,
 ) : TransferCoordinator {
-    private val jobs = ConcurrentHashMap<String, Job>()
+    private val runs = ConcurrentHashMap<String, ActiveRun>()
     private val stateLocks = ConcurrentHashMap<String, Mutex>()
+    private val nextGeneration = AtomicLong()
+    private val closed = AtomicBoolean()
 
     override suspend fun enqueue(initial: DurableTransferState, operation: DurableTransferOperation) {
         require(initial.stage == TransferStage.QUEUED)
-        store.save(initial)
-        launch(initial, operation)
+        val run = lockFor(initial.id).withLock {
+            check(!closed.get()) { "Transfer coordinator is closed" }
+            check(runs[initial.id] == null) { "Transfer is already running" }
+            // A new explicit enqueue is a new generation. It may intentionally reuse an ID after
+            // cancellation, but callbacks from the prior generation can no longer mutate it.
+            store.save(initial)
+            createRun(initial, operation).also { runs[initial.id] = it }
+        }
+        if (closed.get()) {
+            runs.remove(initial.id, run)
+            run.job.cancel()
+            error("Transfer coordinator is closed")
+        }
+        run.job.start()
     }
 
     override suspend fun pause(id: String) {
+        var job: Job? = null
         lockFor(id).withLock {
             val current = store.load(id) ?: return
             if (current.stage !in setOf(TransferStage.DOWNLOADING, TransferStage.EXTRACTING)) return
             persistUnlocked(current, current.copy(stage = TransferStage.PAUSED))
+            job = runs.remove(id)?.job
         }
-        jobs.remove(id)?.cancel(PauseCancellation())
+        job?.cancel(PauseCancellation())
     }
 
     override suspend fun cancel(id: String) {
+        var job: Job? = null
         lockFor(id).withLock {
             val current = store.load(id) ?: return
             if (current.stage in setOf(TransferStage.COMPLETED, TransferStage.CANCELLED)) return
-            persistUnlocked(current, current.copy(stage = TransferStage.CANCELLED))
+            persistUnlocked(current, current.copy(stage = TransferStage.CANCELLED, failureCode = null))
+            job = runs.remove(id)?.job
         }
-        jobs.remove(id)?.cancel(CancellationException("Transfer cancelled"))
+        job?.cancel(CancellationException("Transfer cancelled"))
     }
 
     override suspend fun recover(operations: Map<String, DurableTransferOperation>) {
         operations.forEach { (id, operation) ->
-            val saved = store.load(id) ?: return@forEach
-            if (saved.stage in RECOVERABLE) {
+            val run = lockFor(id).withLock {
+                check(!closed.get()) { "Transfer coordinator is closed" }
+                check(runs[id] == null) { "Transfer is already running" }
+                val saved = store.load(id) ?: return@withLock null
+                if (saved.stage !in RECOVERABLE) return@withLock null
                 val queued = saved.copy(stage = TransferStage.QUEUED)
-                persist(saved, queued)
-                launch(queued, operation)
+                persistUnlocked(saved, queued)
+                createRun(queued, operation).also { runs[id] = it }
             }
+            if (run != null && closed.get()) {
+                runs.remove(id, run)
+                run.job.cancel()
+                error("Transfer coordinator is closed")
+            }
+            run?.job?.start()
         }
     }
 
     override fun close() {
-        jobs.values.forEach { it.cancel() }
-        jobs.clear()
+        if (!closed.compareAndSet(false, true)) return
+        // ConcurrentHashMap's collection-to-list helper can race a finishing job between
+        // hasNext/next. Its weakly-consistent forEach is safe while runs remove themselves.
+        val active = ArrayList<ActiveRun>()
+        runs.forEach { _, run -> active += run }
+        runs.clear()
+        active.forEach { it.job.cancel() }
     }
 
-    private fun launch(initial: DurableTransferState, operation: DurableTransferOperation) {
-        check(jobs[initial.id]?.isActive != true) { "Transfer is already running" }
+    private fun createRun(initial: DurableTransferState, operation: DurableTransferOperation): ActiveRun {
+        val generation = nextGeneration.incrementAndGet()
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 operation.run(initial) { next ->
                     lockFor(initial.id).withLock {
+                        requireCurrentRun(initial.id, generation)
                         val current = store.load(initial.id) ?: error("Transfer checkpoint disappeared")
                         if (current.stage in setOf(TransferStage.PAUSED, TransferStage.CANCELLED)) {
                             throw CancellationException("Transfer was stopped")
@@ -155,20 +191,31 @@ class PersistentTransferCoordinator(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
-                val current = store.load(initial.id) ?: throw failure
-                if (current.stage !in setOf(TransferStage.CANCELLED, TransferStage.PAUSED, TransferStage.COMPLETED)) {
-                    persist(current, current.copy(stage = TransferStage.FAILED, failureCode = failure.javaClass.simpleName))
+                withContext(NonCancellable) {
+                    lockFor(initial.id).withLock {
+                        if (runs[initial.id]?.generation != generation) return@withLock
+                        val current = store.load(initial.id) ?: throw failure
+                        if (current.stage !in setOf(TransferStage.CANCELLED, TransferStage.PAUSED, TransferStage.COMPLETED)) {
+                            persistUnlocked(
+                                current,
+                                current.copy(stage = TransferStage.FAILED, failureCode = failure.javaClass.simpleName),
+                            )
+                        }
+                    }
                 }
             } finally {
-                jobs.remove(initial.id, currentCoroutineContext()[Job])
+                withContext(NonCancellable) {
+                    lockFor(initial.id).withLock {
+                        if (runs[initial.id]?.generation == generation) runs.remove(initial.id)
+                    }
+                }
             }
         }
-        jobs[initial.id] = job
-        job.start()
+        return ActiveRun(generation, job)
     }
 
-    private suspend fun persist(previous: DurableTransferState, next: DurableTransferState) {
-        lockFor(previous.id).withLock { persistUnlocked(previous, next) }
+    private fun requireCurrentRun(id: String, generation: Long) {
+        if (runs[id]?.generation != generation) throw StaleRunCancellation()
     }
 
     private suspend fun persistUnlocked(previous: DurableTransferState, next: DurableTransferState) {
@@ -178,7 +225,9 @@ class PersistentTransferCoordinator(
 
     private fun lockFor(id: String): Mutex = stateLocks.computeIfAbsent(id) { Mutex() }
 
+    private data class ActiveRun(val generation: Long, val job: Job)
     private class PauseCancellation : CancellationException("Transfer paused")
+    private class StaleRunCancellation : CancellationException("A newer transfer generation owns this ID")
 
     companion object {
         private val RECOVERABLE = setOf(
