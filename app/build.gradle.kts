@@ -4,7 +4,9 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
-val configuredAccountOrigin = providers.gradleProperty("vaultAccountOrigin").orElse("").get()
+val configuredAccountOrigin = providers.gradleProperty("vaultAccountOrigin")
+    .orElse("https://vault999-account-staging.2lt.workers.dev")
+    .get()
 val accountOriginLiteral = configuredAccountOrigin.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {

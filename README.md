@@ -61,7 +61,7 @@ Production archive traffic is restricted to the exact HTTPS origin `https://juic
 .\gradlew.bat assembleDebug -PvaultAccountOrigin=https://accounts.example.invalid
 ```
 
-The account service must implement [api-contract.md](docs/api-contract.md), allow the exact callback `vault999://auth/callback`, issue rotating opaque app sessions, and keep Discord client secrets and Discord tokens on the backend. The app uses Custom Tabs, PKCE S256, one-use state/callback handling, and an Android Keystore AES-GCM envelope. No live account endpoint is embedded in the repository; deterministic transport/session coverage remains authoritative when staging is unavailable.
+The account service implements [api-contract.md](docs/api-contract.md), allows the exact callback `vault999://auth/callback`, issues rotating opaque app sessions, and keeps Discord client secrets and Discord tokens on the backend. The app uses Custom Tabs, PKCE S256, one-use state/callback handling, and an Android Keystore AES-GCM envelope. Android builds use the same staging account service as desktop by default; pass `-PvaultAccountOrigin=https://your-owned-origin.example` to select another exact HTTPS origin.
 
 ## Storage and signed-out use
 

@@ -1,6 +1,7 @@
 package com.vault999.android
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,14 +80,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.vault999.android.account.AccountUiState
+import com.vault999.android.auth.AccountProjection
 import com.vault999.android.account.CloudLibraryUiState
 import com.vault999.android.designsystem.VaultColors
-import com.vault999.android.designsystem.VaultWordmark
 import com.vault999.android.listen.ListenMode
 import com.vault999.android.listen.ListenUiState
 import com.vault999.android.listen.RadioUiState
@@ -104,6 +107,7 @@ import com.vault999.android.search.SearchUiState
 
 @Composable
 internal fun MobileArchiveScreen(
+    account: AccountUiState,
     songs: List<CanonicalSong>,
     loading: Boolean,
     offline: Boolean,
@@ -119,6 +123,7 @@ internal fun MobileArchiveScreen(
     favoriteSongIds: Set<Long>,
     onFavorite: (Long) -> Unit,
     onFullCollection: () -> Unit,
+    onAccount: () -> Unit,
     onNested: (String) -> Unit,
 ) {
     var category by remember { mutableStateOf<SongCategory?>(null) }
@@ -140,7 +145,7 @@ internal fun MobileArchiveScreen(
         item {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    VaultWordmark(Modifier.weight(1f))
+                    VaultAccountWordmark(account, onAccount, Modifier.weight(1f))
                     IconButton(onClick = { onNested("downloads") }) { Icon(Icons.Rounded.Download, "Downloads") }
                     IconButton(onClick = { onNested("settings") }) { Icon(Icons.Rounded.Settings, "Settings") }
                 }
@@ -203,6 +208,40 @@ internal fun MobileArchiveScreen(
                 MobileSongRow(song, song.id in favoriteSongIds, { onFavorite(song.id) }) { onPlay(song) }
             }
         }
+    }
+}
+
+@Composable
+private fun VaultAccountWordmark(account: AccountUiState, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val signedIn = account.projection as? AccountProjection.SignedIn
+    val avatarUrl = signedIn?.account?.avatarUrl
+    val label = signedIn?.account?.displayName ?: "999 Vault"
+    Row(
+        modifier.clickable(onClickLabel = "Open account settings", onClick = onClick)
+            .semantics { contentDescription = if (signedIn == null) "999 Vault, signed out" else "Signed in as $label" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val shape = if (signedIn == null) RoundedCornerShape(8.dp) else CircleShape
+        Box(Modifier.size(40.dp).clip(shape).background(VaultColors.Chrome), contentAlignment = Alignment.Center) {
+            Image(
+                painter = painterResource(R.drawable.ic_launcher_foreground),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+            if (!avatarUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = avatarUrl,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            if (account.working) {
+                CircularProgressIndicator(Modifier.size(22.dp), color = VaultColors.Yellow, strokeWidth = 2.dp)
+            }
+        }
+        Text("999 VAULT", Modifier.padding(start = 10.dp), style = MaterialTheme.typography.titleMedium)
     }
 }
 

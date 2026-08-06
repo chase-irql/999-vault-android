@@ -53,7 +53,7 @@ class AccountApiTransport(
             is RawResult.Success -> runCatching {
                 val url = response.body.requiredString("authorize_url", 2048)
                 val parsed = url.toHttpUrl()
-                require(parsed.isHttps && parsed.host == "discord.com" && parsed.username.isEmpty() && parsed.password.isEmpty())
+                require(parsed.isHttps && parsed.host == "discord.com" && parsed.port == 443 && parsed.username.isEmpty() && parsed.password.isEmpty())
                 AccountTransportResult.Success(AuthorizationStart(url, response.body.optionalString("expires_at", 64)))
             }.getOrElse { AccountTransportResult.TransientFailure("invalid_response") }
             RawResult.Rejected -> AccountTransportResult.AuthenticationRejected
@@ -90,7 +90,7 @@ class AccountApiTransport(
 
     override suspend fun account(accessToken: OpaqueSecret): AccountTransportResult<Account> =
         when (val response = request("GET", "/v1/me", bearer = accessToken)) {
-            is RawResult.Success -> runCatching { AccountTransportResult.Success(response.body.asAccount()) }
+            is RawResult.Success -> runCatching { AccountTransportResult.Success(accountFromJson(response.body)) }
                 .getOrElse { AccountTransportResult.TransientFailure("invalid_response") }
             RawResult.Rejected -> AccountTransportResult.AuthenticationRejected
             is RawResult.Failure -> AccountTransportResult.TransientFailure(response.code)
@@ -101,7 +101,7 @@ class AccountApiTransport(
             val access = response.body.requiredString("access_token", 64 * 1024)
             val refresh = response.body.requiredString("refresh_token", 64 * 1024)
             val expires = response.body.requiredString("expires_at", 64).let(::expiryEpochMs)
-            val account = (response.body["user"] as? JsonObject ?: error("missing user")).asAccount()
+            val account = accountFromJson(response.body["user"] as? JsonObject ?: error("missing user"))
             AccountTransportResult.Success(AccountSession.create(account, access, refresh, expires))
         }.getOrElse { AccountTransportResult.TransientFailure("invalid_response") }
         RawResult.Rejected -> AccountTransportResult.AuthenticationRejected
@@ -142,13 +142,6 @@ class AccountApiTransport(
         }
     }
 
-    private fun JsonObject.asAccount() = Account(
-        id = requiredString("id", 128),
-        displayName = requiredString("display_name", 200),
-        discordUsername = optionalString("discord_username", 200),
-        avatarUrl = optionalString("avatar_url", 2048),
-    )
-
     private fun JsonObject.requiredString(key: String, max: Int): String = optionalString(key, max)?.takeIf(String::isNotBlank) ?: error("missing $key")
     private fun JsonObject.optionalString(key: String, max: Int): String? = this[key]?.jsonPrimitive?.content?.trim()?.take(max)
     private fun expiryEpochMs(value: String): Long = value.toLongOrNull()?.let { if (it < 10_000_000_000L) it * 1000 else it }
@@ -166,3 +159,17 @@ class AccountApiTransport(
         private const val REDIRECT_URI = "vault999://auth/callback"
     }
 }
+
+internal fun accountFromJson(value: JsonObject) = Account(
+    id = value.requiredAccountString("id", 128),
+    displayName = value.requiredAccountString("display_name", 200),
+    discordUsername = value.optionalAccountString("discord_username", 200),
+    avatarUrl = value.optionalAccountString("discord_avatar", 2048)
+        ?: value.optionalAccountString("avatar_url", 2048),
+)
+
+private fun JsonObject.requiredAccountString(key: String, max: Int): String =
+    optionalAccountString(key, max)?.takeIf(String::isNotBlank) ?: error("missing $key")
+
+private fun JsonObject.optionalAccountString(key: String, max: Int): String? =
+    this[key]?.jsonPrimitive?.content?.trim()?.take(max)

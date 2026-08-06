@@ -390,6 +390,7 @@ fun VaultApp() {
         NavHost(navController = navController, startDestination = "archive", modifier = Modifier.padding(padding)) {
             composable("archive") {
                 MobileArchiveScreen(
+                    account = accountState,
                     songs = catalogState.songs,
                     loading = catalogState.loading,
                     offline = catalogState.offline,
@@ -405,6 +406,7 @@ fun VaultApp() {
                     favoriteSongIds = libraryState.favorites.mapNotNull { it.canonicalSongId }.toSet(),
                     onFavorite = libraryViewModel::toggleFavorite,
                     onFullCollection = downloadViewModel::enqueueFullCollection,
+                    onAccount = { navController.navigate("settings") },
                     onNested = navController::navigate,
                 )
             }
@@ -1278,7 +1280,7 @@ private fun SettingsScreen(
                     AccountProjection.SignedOut -> {
                         if (account.configured) {
                             Text("Sync likes and playlists.")
-                            Button(onClick = onSignIn, enabled = !account.working, modifier = Modifier.padding(top = 8.dp)) { Text("Sign in") }
+                            Button(onClick = onSignIn, enabled = !account.working, modifier = Modifier.padding(top = 8.dp)) { Text("Continue with Discord") }
                         } else {
                             Text("Account sync isn’t available", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
