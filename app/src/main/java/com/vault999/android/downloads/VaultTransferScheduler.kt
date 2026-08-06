@@ -140,7 +140,7 @@ object TransferNotifications {
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Vault downloads", NotificationManager.IMPORTANCE_LOW))
         val stage = job?.stage ?: DownloadStage.QUEUED
         val builder = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(job?.displayName ?: "999 Vault download")
             .setContentText(stage.name.lowercase().replace('_', ' '))
             .setOngoing(stage !in setOf(DownloadStage.COMPLETED, DownloadStage.CANCELLED, DownloadStage.FAILED))
