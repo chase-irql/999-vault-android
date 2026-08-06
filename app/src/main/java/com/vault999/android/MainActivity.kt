@@ -30,7 +30,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
@@ -41,6 +43,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
@@ -68,6 +71,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
@@ -82,6 +87,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -98,6 +105,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -154,6 +164,8 @@ import com.vault999.android.account.CloudLibraryViewModel
 import com.vault999.android.account.CloudSyncScheduler
 import com.vault999.android.auth.AccountProjection
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Size
 import androidx.media3.common.Player
 import androidx.media3.ui.compose.PlayerSurface
 import kotlinx.coroutines.launch
@@ -388,19 +400,20 @@ fun VaultApp() {
         }
     }
     val topLevel = topDestinations.any { target -> destination?.hierarchy?.any { it.route == target.route } == true }
+    val libraryDetail = destination?.route in setOf("playlist", "cloud-playlist", "liked")
 
     Scaffold(
         containerColor = VaultColors.Canvas,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             Column(Modifier.background(VaultColors.Chrome).windowInsetsPadding(WindowInsets.navigationBars)) {
-                if (topLevel) {
+                if (topLevel || libraryDetail) {
                     playbackState.currentItem?.let { item ->
                         MobileMiniPlayer(item = item, playing = playbackState.playing, positionMs = playbackState.positionMs, durationMs = playbackState.durationMs, onToggle = playbackController::toggle, onOpen = { navController.navigate("now-playing") })
                     }
                     NavigationBar(containerColor = VaultColors.Chrome) {
                         topDestinations.forEach { target ->
-                            val selected = destination?.hierarchy?.any { it.route == target.route } == true
+                            val selected = destination?.hierarchy?.any { it.route == target.route } == true || (libraryDetail && target.route == "music")
                             NavigationBarItem(
                                 selected = selected,
                                 onClick = {
@@ -412,7 +425,7 @@ fun VaultApp() {
                                 },
                                 icon = { Icon(target.icon, contentDescription = null) },
                                 label = { Text(target.label) },
-                                alwaysShowLabel = false,
+                                alwaysShowLabel = true,
                                 modifier = Modifier.semantics { contentDescription = "${target.label} tab${if (selected) ", selected" else ""}" },
                             )
                         }
@@ -463,7 +476,6 @@ fun VaultApp() {
                 MobileLibraryScreen(
                     state = libraryState,
                     cloud = cloudLibraryState,
-                    catalog = catalogState.songs,
                     onCreatePlaylist = libraryViewModel::createPlaylist,
                     onDeletePlaylist = libraryViewModel::deletePlaylist,
                     onCreateCloudPlaylist = cloudLibraryViewModel::createPlaylist,
@@ -471,12 +483,12 @@ fun VaultApp() {
                     onRetryCloud = cloudLibraryViewModel::retrySync,
                     onOpenDevicePlaylist = { id -> libraryViewModel.selectPlaylist(id); navController.navigate("playlist") },
                     onOpenCloudPlaylist = { id -> selectedCloudPlaylistId = id; navController.navigate("cloud-playlist") },
+                    onOpenLikedSongs = { navController.navigate("liked") },
                     onPlayDownloaded = { item ->
                         item.localUri?.let { uri ->
                             playbackController.play(listOf(QueueItem("download:${item.id}", item.name, "On this device", uri, local = true)))
                         }
                     },
-                    onPlaySong = playSong,
                     onNested = navController::navigate,
                 )
             }
@@ -586,12 +598,13 @@ fun VaultApp() {
             }
             composable("playlist") {
                 val detail = selectedDevicePlaylist
-                PlaylistEditorScreen(
+                MobilePlaylistScreen(
                     title = detail?.playlist?.name ?: "Device playlist",
                     description = detail?.playlist?.description.orEmpty(),
                     ownership = "On this device",
                     songIds = detail?.songIds.orEmpty(),
                     catalog = catalogState.songs,
+                    coverUrl = null,
                     onSave = { name, description -> detail?.playlist?.id?.let { libraryViewModel.updatePlaylist(it, name, description) } },
                     onSongs = { songs -> detail?.playlist?.id?.let { libraryViewModel.setPlaylistSongs(it, songs) } },
                     onDelete = {
@@ -605,12 +618,13 @@ fun VaultApp() {
             }
             composable("cloud-playlist") {
                 val playlist = cloudLibraryState.projection.cloudPlaylists.firstOrNull { (it.localId ?: it.id) == selectedCloudPlaylistId }
-                PlaylistEditorScreen(
+                MobilePlaylistScreen(
                     title = playlist?.name ?: "Cloud playlist",
                     description = playlist?.description.orEmpty(),
-                    ownership = playlist?.syncState?.name?.lowercase()?.replace('_', ' ') ?: "Unavailable",
+                    ownership = "999 Vault",
                     songIds = playlist?.songIds.orEmpty(),
                     catalog = catalogState.songs,
+                    coverUrl = playlist?.coverUrl,
                     onSave = { name, description -> playlist?.let { cloudLibraryViewModel.updatePlaylist(it.localId ?: it.id, name, description) } },
                     onSongs = { songs ->
                         playlist?.let { current ->
@@ -627,6 +641,30 @@ fun VaultApp() {
                     },
                     onPlay = { songs, shuffle -> playPlaylist(songs, catalogState.songs, shuffle, playbackController) },
                     onBack = { selectedCloudPlaylistId = null; navController.popBackStack() },
+                )
+            }
+            composable("liked") {
+                val likedSongIds = remember(libraryState.favorites, cloudLibraryState.projection.cloudLikes, cloudSongsById) {
+                    (libraryState.favorites.mapNotNull { it.canonicalSongId } +
+                        cloudLibraryState.projection.cloudLikes.filter { it.liked }.map { it.songId })
+                        .mapNotNull { cloudSongsById[it]?.id }
+                        .distinct()
+                }
+                MobilePlaylistScreen(
+                    title = "Liked Songs",
+                    description = "",
+                    ownership = "999 Vault",
+                    songIds = likedSongIds,
+                    catalog = catalogState.songs,
+                    coverUrl = null,
+                    likedCollection = true,
+                    editable = false,
+                    onSave = null,
+                    onSongs = null,
+                    onDelete = null,
+                    onPlay = { songs, shuffle -> playPlaylist(songs, catalogState.songs, shuffle, playbackController) },
+                    onToggleLike = toggleLike,
+                    onBack = navController::popBackStack,
                 )
             }
         }
@@ -1744,5 +1782,288 @@ private fun PlaylistEditorScreen(
             }
             item { TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete playlist", color = MaterialTheme.colorScheme.error) } }
         }
+    }
+}
+
+@Composable
+private fun MobilePlaylistScreen(
+    title: String,
+    description: String,
+    ownership: String,
+    songIds: List<Long>,
+    catalog: List<CanonicalSong>,
+    coverUrl: String?,
+    likedCollection: Boolean = false,
+    editable: Boolean = true,
+    onSave: ((String, String) -> Unit)?,
+    onSongs: ((List<Long>) -> Unit)?,
+    onDelete: (() -> Unit)?,
+    onPlay: (List<Long>, Boolean) -> Unit,
+    onToggleLike: ((CanonicalSong) -> Unit)? = null,
+    onBack: () -> Unit,
+) {
+    var editedName by remember(title) { mutableStateOf(title) }
+    var editedDescription by remember(description) { mutableStateOf(description) }
+    var filterQuery by remember { mutableStateOf("") }
+    var addQuery by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var headerMenu by remember { mutableStateOf(false) }
+    var rowMenuSongId by remember { mutableStateOf<Long?>(null) }
+    val listState = rememberLazyListState()
+    val songsById = remember(catalog) { cloudSongIndex(catalog) }
+    val resolvedRows = remember(songIds, songsById) {
+        songIds.mapNotNull { sourceId -> songsById[sourceId]?.let { sourceId to it } }.distinctBy { it.second.id }
+    }
+    val filteredRows = remember(resolvedRows, filterQuery) {
+        val query = filterQuery.trim()
+        if (query.isEmpty()) resolvedRows else resolvedRows.filter { (_, song) ->
+            song.title.contains(query, true) || song.artist.contains(query, true) || song.aliases.any { it.contains(query, true) }
+        }
+    }
+    LaunchedEffect(title) { listState.scrollToItem(0) }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this playlist?") },
+            confirmButton = { Button(onClick = { confirmDelete = false; onDelete?.invoke() }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(VaultColors.BlueBlack, VaultColors.Canvas), endY = 1_150f))
+            .windowInsetsPadding(WindowInsets.statusBars),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 20.dp),
+    ) {
+        item {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
+                }
+                TextField(
+                    value = filterQuery,
+                    onValueChange = { filterQuery = it.take(80) },
+                    placeholder = { Text("Find in playlist") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, null, modifier = Modifier.size(20.dp)) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = VaultColors.SurfaceRaised.copy(alpha = .82f),
+                        unfocusedContainerColor = VaultColors.SurfaceRaised.copy(alpha = .82f),
+                        disabledContainerColor = VaultColors.SurfaceRaised.copy(alpha = .62f),
+                        focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        disabledIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                )
+                MobilePlaylistCover(
+                    coverUrl = coverUrl,
+                    songs = resolvedRows.map { it.second },
+                    likedCollection = likedCollection,
+                    modifier = Modifier.fillMaxWidth(.72f).aspectRatio(1f).align(Alignment.CenterHorizontally),
+                )
+                Text(title, style = MaterialTheme.typography.headlineLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (description.isNotBlank()) Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("$ownership · ${songIds.size} ${if (songIds.size == 1) "song" else "songs"}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleMedium)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (editable) {
+                        Box {
+                            IconButton(onClick = { headerMenu = true }) { Icon(Icons.Rounded.MoreVert, "Playlist options") }
+                            DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(if (editing) "Done editing" else "Edit playlist") },
+                                    onClick = { editing = !editing; headerMenu = false },
+                                    leadingIcon = { Icon(Icons.Rounded.Edit, null) },
+                                )
+                                if (onDelete != null) DropdownMenuItem(
+                                    text = { Text("Delete playlist") },
+                                    onClick = { headerMenu = false; confirmDelete = true },
+                                    leadingIcon = { Icon(Icons.Rounded.Delete, null) },
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { onPlay(songIds, true) }, enabled = resolvedRows.isNotEmpty(), modifier = Modifier.size(58.dp)) {
+                        Icon(Icons.Rounded.Shuffle, "Shuffle playlist", tint = VaultColors.Cyan)
+                    }
+                    FilledIconButton(onClick = { onPlay(songIds, false) }, enabled = resolvedRows.isNotEmpty(), modifier = Modifier.size(68.dp)) {
+                        Icon(Icons.Rounded.PlayArrow, "Play playlist", modifier = Modifier.size(36.dp))
+                    }
+                }
+                if (editing) {
+                    OutlinedTextField(editedName, { editedName = it.take(80) }, Modifier.fillMaxWidth(), label = { Text("Name") }, singleLine = true)
+                    OutlinedTextField(editedDescription, { editedDescription = it.take(500) }, Modifier.fillMaxWidth(), label = { Text("Description") })
+                    Button(
+                        onClick = { onSave?.invoke(editedName, editedDescription); editing = false },
+                        enabled = editedName.isNotBlank() && onSave != null,
+                    ) { Text("Save") }
+                    OutlinedTextField(
+                        value = addQuery,
+                        onValueChange = { addQuery = it.take(80) },
+                        placeholder = { Text("Add songs") },
+                        leadingIcon = { Icon(Icons.Rounded.Add, null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+        if (editing && addQuery.isNotBlank() && onSongs != null) {
+            val currentCanonicalIds = resolvedRows.map { it.second.id }.toSet()
+            val matches = catalog.filter { song ->
+                song.id !in currentCanonicalIds && (song.title.contains(addQuery, true) || song.artist.contains(addQuery, true))
+            }.take(8)
+            items(matches, key = { "add-song:${it.id}" }) { song ->
+                MobilePlaylistSongRow(song = song, onClick = { onSongs(songIds + song.id); addQuery = "" }) {
+                    Icon(Icons.Rounded.Add, "Add ${song.title}")
+                }
+            }
+        }
+        if (songIds.isNotEmpty() && resolvedRows.size < songIds.distinct().size) {
+            item { Text("Loading songs…", color = VaultColors.Cyan, modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)) }
+        }
+        if (filteredRows.isEmpty()) {
+            item {
+                Text(
+                    if (filterQuery.isBlank()) "No songs yet" else "No matches",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(32.dp),
+                )
+            }
+        } else {
+            items(filteredRows, key = { "playlist-song:${it.second.id}" }) { (sourceId, song) ->
+                MobilePlaylistSongRow(song = song, onClick = { onPlay(listOf(sourceId), false) }) {
+                    if (onToggleLike != null) {
+                        Box {
+                            IconButton(onClick = { rowMenuSongId = sourceId }) {
+                                Icon(Icons.Rounded.MoreVert, "Options for ${song.title}")
+                            }
+                            DropdownMenu(expanded = rowMenuSongId == sourceId, onDismissRequest = { rowMenuSongId = null }) {
+                                DropdownMenuItem(
+                                    text = { Text("Remove from Liked Songs") },
+                                    onClick = { onToggleLike(song); rowMenuSongId = null },
+                                    leadingIcon = { Icon(Icons.Rounded.Favorite, null) },
+                                )
+                            }
+                        }
+                    } else if (editable && onSongs != null) {
+                        Box {
+                            IconButton(onClick = { rowMenuSongId = sourceId }) { Icon(Icons.Rounded.MoreVert, "Options for ${song.title}") }
+                            val index = songIds.indexOf(sourceId)
+                            DropdownMenu(expanded = rowMenuSongId == sourceId, onDismissRequest = { rowMenuSongId = null }) {
+                                DropdownMenuItem(
+                                    text = { Text("Move up") },
+                                    enabled = index > 0,
+                                    onClick = {
+                                        val reordered = songIds.toMutableList()
+                                        val previous = reordered[index - 1]
+                                        reordered[index - 1] = reordered[index]
+                                        reordered[index] = previous
+                                        onSongs(reordered)
+                                        rowMenuSongId = null
+                                    },
+                                    leadingIcon = { Icon(Icons.Rounded.ArrowUpward, null) },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Move down") },
+                                    enabled = index in 0 until songIds.lastIndex,
+                                    onClick = {
+                                        val reordered = songIds.toMutableList()
+                                        val next = reordered[index + 1]
+                                        reordered[index + 1] = reordered[index]
+                                        reordered[index] = next
+                                        onSongs(reordered)
+                                        rowMenuSongId = null
+                                    },
+                                    leadingIcon = { Icon(Icons.Rounded.ArrowDownward, null) },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Remove") },
+                                    onClick = { onSongs(songIds.filterNot { it == sourceId }); rowMenuSongId = null },
+                                    leadingIcon = { Icon(Icons.Rounded.Delete, null) },
+                                )
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(color = VaultColors.SurfaceRaised, modifier = Modifier.padding(start = 92.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobilePlaylistSongRow(song: CanonicalSong, onClick: () -> Unit, action: @Composable () -> Unit = {}) {
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = song.isPlayable, onClickLabel = "Play ${song.title}", onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MobilePlaylistArtwork(song.artworkUrl, song.title, Modifier.size(52.dp).clip(RoundedCornerShape(7.dp)))
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+            Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        action()
+    }
+}
+
+@Composable
+private fun MobilePlaylistCover(
+    coverUrl: String?,
+    songs: List<CanonicalSong>,
+    likedCollection: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val artwork = songs.mapNotNull { it.artworkUrl }.distinct().take(4)
+    Box(modifier.clip(RoundedCornerShape(10.dp)).background(VaultColors.SurfaceRaised), contentAlignment = Alignment.Center) {
+        when {
+            !coverUrl.isNullOrBlank() -> MobilePlaylistArtwork(coverUrl, "Playlist cover", Modifier.fillMaxSize(), originalSize = true)
+            artwork.size == 1 -> MobilePlaylistArtwork(artwork.single(), songs.firstOrNull()?.title ?: "Playlist", Modifier.fillMaxSize(), originalSize = true)
+            artwork.size == 2 -> Row(Modifier.fillMaxSize()) {
+                artwork.forEach { url ->
+                    MobilePlaylistArtwork(url, "Playlist artwork", Modifier.weight(1f).fillMaxHeight(), originalSize = true)
+                }
+            }
+            artwork.size == 3 -> Row(Modifier.fillMaxSize()) {
+                MobilePlaylistArtwork(artwork[0], "Playlist artwork", Modifier.weight(1f).fillMaxHeight(), originalSize = true)
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                    MobilePlaylistArtwork(artwork[1], "Playlist artwork", Modifier.weight(1f).fillMaxWidth(), originalSize = true)
+                    MobilePlaylistArtwork(artwork[2], "Playlist artwork", Modifier.weight(1f).fillMaxWidth(), originalSize = true)
+                }
+            }
+            artwork.size >= 4 -> {
+                Column(Modifier.fillMaxSize()) {
+                    repeat(2) { row ->
+                        Row(Modifier.weight(1f)) {
+                            repeat(2) { column ->
+                                MobilePlaylistArtwork(artwork[row * 2 + column], "Playlist artwork", Modifier.weight(1f).fillMaxHeight(), originalSize = true)
+                            }
+                        }
+                    }
+                }
+            }
+            likedCollection -> Box(
+                Modifier.fillMaxSize().background(Brush.linearGradient(listOf(VaultColors.Cyan, VaultColors.BlueBlack))),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.Favorite, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.fillMaxSize(.34f)) }
+            else -> Icon(Icons.Rounded.MusicNote, "Playlist cover", tint = VaultColors.Cyan, modifier = Modifier.fillMaxSize(.3f))
+        }
+    }
+}
+
+@Composable
+private fun MobilePlaylistArtwork(url: String?, title: String, modifier: Modifier = Modifier, originalSize: Boolean = false) {
+    Box(modifier.background(VaultColors.SurfaceRaised), contentAlignment = Alignment.Center) {
+        Icon(Icons.Rounded.MusicNote, null, tint = VaultColors.Cyan.copy(alpha = .5f), modifier = Modifier.fillMaxSize(.28f))
+        if (!url.isNullOrBlank()) AsyncImage(
+            model = if (originalSize) ImageRequest.Builder(LocalContext.current).data(url).size(Size.ORIGINAL).build() else url,
+            contentDescription = "Artwork for $title",
+            modifier = Modifier.fillMaxSize(),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+        )
     }
 }

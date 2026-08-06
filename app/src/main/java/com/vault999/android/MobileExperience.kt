@@ -363,14 +363,13 @@ internal fun MobileListenScreen(
     }
 }
 
-private enum class LibraryShelf(val label: String) { PLAYLISTS("Playlists"), DOWNLOADS("Downloads"), FAVORITES("Liked") }
+private enum class LibraryShelf(val label: String) { PLAYLISTS("Playlists"), DOWNLOADS("Downloads") }
 private data class LibraryDelete(val id: String, val name: String, val cloud: Boolean)
 
 @Composable
 internal fun MobileLibraryScreen(
     state: LibraryUiState,
     cloud: CloudLibraryUiState,
-    catalog: List<CanonicalSong>,
     onCreatePlaylist: (String) -> Unit,
     onDeletePlaylist: (String) -> Unit,
     onCreateCloudPlaylist: (String, String) -> Unit,
@@ -378,15 +377,14 @@ internal fun MobileLibraryScreen(
     onRetryCloud: () -> Unit,
     onOpenDevicePlaylist: (String) -> Unit,
     onOpenCloudPlaylist: (String) -> Unit,
+    onOpenLikedSongs: () -> Unit,
     onPlayDownloaded: (DownloadedItem) -> Unit,
-    onPlaySong: (CanonicalSong) -> Unit,
     onNested: (String) -> Unit,
 ) {
     var shelf by remember { mutableStateOf(LibraryShelf.PLAYLISTS) }
     var adding by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<LibraryDelete?>(null) }
-    val songsById = remember(catalog) { cloudSongIndex(catalog) }
     pendingDelete?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
@@ -410,6 +408,7 @@ internal fun MobileLibraryScreen(
             }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(LibraryShelf.entries) { value -> FilterChip(shelf == value, { shelf = value }, label = { Text(value.label) }) }
+                item { FilterChip(false, onOpenLikedSongs, label = { Text("Liked") }, leadingIcon = { Icon(Icons.Rounded.Favorite, null) }) }
             }
             if (adding) {
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -451,18 +450,6 @@ internal fun MobileLibraryScreen(
                     }
                 }
                 if (state.downloads.isEmpty()) item { CompactEmpty(Icons.Rounded.Download, "No downloads") }
-            }
-            LibraryShelf.FAVORITES -> {
-                val likedSongs = (
-                    state.favorites.mapNotNull { it.canonicalSongId } +
-                        cloud.projection.cloudLikes.filter { it.liked }.map { it.songId }
-                    ).mapNotNull(songsById::get).distinctBy { it.id }
-                items(likedSongs, key = { it.id }) { song ->
-                    LibraryRow(song.title, song.artist, Icons.Rounded.Favorite, { onPlaySong(song) }) {
-                        IconButton(onClick = { onPlaySong(song) }) { Icon(Icons.Rounded.PlayArrow, "Play ${song.title}") }
-                    }
-                }
-                if (likedSongs.isEmpty()) item { CompactEmpty(Icons.Rounded.FavoriteBorder, "No liked songs") }
             }
         }
     }
@@ -580,20 +567,21 @@ private fun StatCard(value: String, label: String, modifier: Modifier = Modifier
 @Composable
 internal fun MobileMiniPlayer(item: QueueItem, playing: Boolean, positionMs: Long, durationMs: Long?, onToggle: () -> Unit, onOpen: () -> Unit) {
     Column(
-        Modifier.fillMaxWidth().background(VaultColors.SurfaceRaised).clickable(onClickLabel = "Open Now Playing", onClick = onOpen)
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clip(RoundedCornerShape(10.dp))
+            .background(VaultColors.SurfaceRaised).clickable(onClickLabel = "Open Now Playing", onClick = onOpen)
             .semantics { contentDescription = "Mini player, ${item.title}, ${if (playing) "playing" else "paused"}" },
     ) {
         Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            VaultArtwork(item.artworkUri, item.title, Modifier.size(48.dp))
+            VaultArtwork(item.artworkUri, item.title, Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)))
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                Text(item.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = VaultColors.Cyan)
+                Text(item.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = onToggle) { Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play") }
+            IconButton(onClick = onToggle, modifier = Modifier.size(48.dp)) { Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play") }
         }
         val progress = durationMs?.takeIf { it > 0 }?.let { (positionMs.toFloat() / it).coerceIn(0f, 1f) } ?: 0f
         Box(Modifier.fillMaxWidth().height(2.dp).background(VaultColors.Ink)) {
-            Box(Modifier.fillMaxWidth(progress).height(2.dp).background(VaultColors.Cyan))
+            Box(Modifier.fillMaxWidth(progress).height(2.dp).background(VaultColors.Yellow))
         }
     }
 }
