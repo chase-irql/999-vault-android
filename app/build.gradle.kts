@@ -84,6 +84,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.icons)
     implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
     implementation(libs.okhttp)
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.work.runtime)

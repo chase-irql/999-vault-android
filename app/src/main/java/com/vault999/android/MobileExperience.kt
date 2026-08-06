@@ -699,10 +699,9 @@ private fun CompactEmpty(icon: ImageVector, title: String) {
 @Composable
 private fun VaultArtwork(url: String?, title: String, modifier: Modifier = Modifier) {
     Box(modifier.clip(RoundedCornerShape(10.dp)).background(Brush.linearGradient(listOf(VaultColors.SurfaceRaised, VaultColors.BlueBlack))), contentAlignment = Alignment.Center) {
+        Icon(Icons.Rounded.MusicNote, null, tint = VaultColors.Cyan.copy(alpha = .55f), modifier = Modifier.fillMaxSize(.24f))
         if (!url.isNullOrBlank()) {
             AsyncImage(url, "Artwork for $title", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        } else {
-            Icon(Icons.Rounded.MusicNote, "Artwork unavailable", tint = VaultColors.Cyan.copy(alpha = .55f), modifier = Modifier.fillMaxSize(.24f))
         }
     }
 }
