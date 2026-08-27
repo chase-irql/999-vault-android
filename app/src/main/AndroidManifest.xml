@@ -61,7 +61,7 @@
         </service>
         <service
             android:name=".downloads.VaultTransferJobService"
-            android:exported="true"
+            android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE"
             tools:ignore="ExportedService"
             tools:targetApi="34" />

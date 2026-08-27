@@ -33,6 +33,7 @@ class VaultGraph(context: Context) {
             .callTimeout(45, TimeUnit.SECONDS)
             .build()
     }
+    private val transferHttp: OkHttpClient by lazy { http.forStreamingTransfers() }
     val archiveApi: JuiceWrldApiClient by lazy { JuiceWrldApiClient(http) }
     val catalogRepository: CatalogRepository by lazy { CatalogRepository(database.songs(), archiveApi) }
     val archiveRepository: ArchiveRepository by lazy { ArchiveRepository(database.archive(), archiveApi) }
@@ -43,7 +44,7 @@ class VaultGraph(context: Context) {
     }
     val radioRepository: RadioRepository by lazy { RadioRepository(archiveApi, database.archive()) }
     val downloadRepository: DownloadRepository by lazy {
-        DownloadRepository(applicationContext, database.downloads(), http, VaultTransferScheduler(applicationContext), preferences, archiveApi)
+        DownloadRepository(applicationContext, database.downloads(), transferHttp, VaultTransferScheduler(applicationContext), preferences, archiveApi)
     }
     val accountRepository: AccountRepository by lazy {
         AccountRepository(applicationContext, http, BuildConfig.ACCOUNT_API_ORIGIN)
@@ -70,3 +71,13 @@ class VaultGraph(context: Context) {
         if (sessions == null || transport == null) null else ListeningSyncRepository(database.sync(), sessions, transport)
     }
 }
+
+/**
+ * Streaming transfers may legitimately run for hours. A whole-call timeout would cancel a healthy
+ * collection download even while bytes are arriving; retain bounded connect and idle-read timeouts
+ * while removing only that total wall-clock deadline.
+ */
+internal fun OkHttpClient.forStreamingTransfers(): OkHttpClient = newBuilder()
+    .callTimeout(0, TimeUnit.MILLISECONDS)
+    .readTimeout(2, TimeUnit.MINUTES)
+    .build()

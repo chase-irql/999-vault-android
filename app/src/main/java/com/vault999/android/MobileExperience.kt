@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -64,6 +65,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -604,11 +606,12 @@ internal fun MobileNowPlayingScreen(
     onOpenQueue: () -> Unit,
     onBack: () -> Unit,
 ) {
-    LazyColumn(
-        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(VaultColors.BlueBlack, VaultColors.Canvas, VaultColors.Chrome))).windowInsetsPadding(WindowInsets.statusBars),
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(VaultColors.BlueBlack, VaultColors.Canvas, VaultColors.Chrome)))) {
+      LazyColumn(
+        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars),
         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+      ) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Rounded.KeyboardArrowDown, "Back") }
@@ -623,8 +626,20 @@ internal fun MobileNowPlayingScreen(
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(state.title.ifBlank { "Nothing playing" }, style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(state.artist.ifBlank { "999 Vault" }, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        state.title.ifBlank { "Nothing playing" },
+                        style = MaterialTheme.typography.headlineMedium,
+                        minLines = 2,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        state.artist.ifBlank { "999 Vault" },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 IconButton(onClick = onFavorite, enabled = state.currentItem?.canonicalSongId != null) {
                     Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, if (favorite) "Unlike" else "Like", tint = if (favorite) VaultColors.Yellow else MaterialTheme.colorScheme.onSurface)
@@ -632,21 +647,25 @@ internal fun MobileNowPlayingScreen(
             }
         }
         item {
-            val duration = state.durationMs?.takeIf { it > 0 }
-            if (duration != null) {
+            val duration = playbackTimelineDuration(state)
+            if (state.playbackMode == PlaybackMode.RADIO) {
+                Box(Modifier.fillMaxWidth().height(68.dp), contentAlignment = Alignment.CenterStart) {
+                    Text("LIVE", color = VaultColors.Red, style = MaterialTheme.typography.labelLarge)
+                }
+            } else {
+                val timelineMaximum = duration?.toFloat() ?: 1f
                 Slider(
-                    value = state.positionMs.coerceIn(0, duration).toFloat(),
+                    value = duration?.let { state.positionMs.coerceIn(0, it).toFloat() } ?: 0f,
                     onValueChange = { onSeek(it.toLong()) },
-                    valueRange = 0f..duration.toFloat(),
+                    valueRange = 0f..timelineMaximum,
+                    enabled = duration != null,
                     modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Playback position" },
                 )
                 Row(Modifier.fillMaxWidth()) {
-                    Text(formatTime(state.positionMs), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
+                    Text(formatTime(if (duration == null) 0 else state.positionMs), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.weight(1f))
-                    Text(formatTime(duration), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
+                    Text(duration?.let(::formatTime) ?: "--:--", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
                 }
-            } else if (state.playbackMode == PlaybackMode.RADIO) {
-                Text("LIVE", color = VaultColors.Red, style = MaterialTheme.typography.labelLarge)
             }
         }
         item {
@@ -672,9 +691,27 @@ internal fun MobileNowPlayingScreen(
                 PlayerAction(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", onOpenQueue, state.queue.isNotEmpty())
             }
         }
-        state.error?.let {
-            item { Button(onClick = onRetry) { Text("Retry") } }
-        }
+      }
+      if (state.error != null) {
+          Surface(
+              modifier = Modifier
+                  .align(Alignment.BottomCenter)
+                  .fillMaxWidth()
+                  .windowInsetsPadding(WindowInsets.navigationBars)
+                  .padding(horizontal = 24.dp, vertical = 16.dp),
+              shape = RoundedCornerShape(12.dp),
+              color = VaultColors.SurfaceRaised,
+              tonalElevation = 8.dp,
+          ) {
+              Row(
+                  Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+              ) {
+                  Text("Couldn't play this song", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                  TextButton(onClick = onRetry) { Text("Retry") }
+              }
+          }
+      }
     }
 }
 
@@ -694,6 +731,9 @@ private fun formatTime(milliseconds: Long): String {
     val seconds = (milliseconds.coerceAtLeast(0) / 1000)
     return "%d:%02d".format(seconds / 60, seconds % 60)
 }
+
+internal fun playbackTimelineDuration(state: PlaybackUiState): Long? =
+    state.durationMs?.takeIf { it > 0 } ?: state.currentItem?.durationMs?.takeIf { it > 0 }
 
 @Composable
 private fun QueueRow(item: QueueItem) {

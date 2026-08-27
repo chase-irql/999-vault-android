@@ -1422,7 +1422,7 @@ private fun DownloadsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        job.errorCode?.let { Text("Retryable failure: $it", color = MaterialTheme.colorScheme.error) }
+                        job.errorCode?.let { Text(downloadFailureMessage(it), color = MaterialTheme.colorScheme.error) }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             when (job.stage) {
                                 DownloadStage.PAUSED, DownloadStage.FAILED, DownloadStage.INTERRUPTED -> Button(onClick = { onResume(job.id) }) { Text("Resume") }
@@ -1438,6 +1438,15 @@ private fun DownloadsScreen(
             }
         }
     }
+}
+
+internal fun downloadFailureMessage(code: String): String = when (code) {
+    "InterruptedIOException", "SocketTimeoutException", "SocketException", "EOFException" ->
+        "Connection interrupted. Retrying automatically."
+    "StorageNotSeekableException" -> "This storage location cannot resume the download."
+    "StoragePermissionLostException", "SecurityException" -> "Download folder access was lost. Choose the folder again."
+    "ZipException", "UnsafeArchiveException" -> "The downloaded collection could not be validated."
+    else -> "Download stopped. Resume to try again."
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

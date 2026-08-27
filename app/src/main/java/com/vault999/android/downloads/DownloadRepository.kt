@@ -9,6 +9,7 @@ import com.vault999.android.model.DownloadJob
 import com.vault999.android.model.DownloadKind
 import com.vault999.android.model.DownloadStage
 import java.io.File
+import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,9 @@ import okhttp3.Request
 import com.vault999.android.preferences.VaultPreferences
 import kotlinx.coroutines.flow.first
 import com.vault999.android.network.JuiceWrldApiClient
+import com.vault999.android.network.NetworkException
 import com.vault999.android.network.ZipJobState
+import com.vault999.android.model.VaultError
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -129,15 +132,14 @@ class DownloadRepository(
         dao.updateStage(id, DownloadStage.CANCELLED.name, now())
     }
 
-    suspend fun execute(id: String, progress: suspend (DownloadJob) -> Unit = {}) = withContext(Dispatchers.IO) {
+    suspend fun execute(id: String, progress: suspend (DownloadJob) -> Unit = {}): TransferExecutionResult = withContext(Dispatchers.IO) {
         val concurrency = preferences.settings.first().downloadConcurrency.coerceIn(1, 4)
         TransferConcurrencyGate.acquire(concurrency)
         try {
-            var row = dao.get(id) ?: return@withContext
-            if (row.stage == DownloadStage.CANCELLED.name || row.stage == DownloadStage.COMPLETED.name) return@withContext
+            var row = dao.get(id) ?: return@withContext TransferExecutionResult.FINISHED
+            if (row.stage == DownloadStage.CANCELLED.name || row.stage == DownloadStage.COMPLETED.name) return@withContext TransferExecutionResult.FINISHED
             if (row.kind == DownloadKind.FULL_COLLECTION.name) {
-                executeCollection(row, progress)
-                return@withContext
+                return@withContext executeCollection(row, progress)
             }
             val source = decodeFileSource(row.sourceJson)
             val storage: VaultStorage = when (row.destinationType) {
@@ -191,6 +193,7 @@ class DownloadRepository(
                 row = row.copy(stage = DownloadStage.COMPLETED.name, updatedAtEpochMs = now(), checkpointJson = null, currentItem = null)
                 dao.upsert(row)
                 progress(row.asModel())
+                TransferExecutionResult.FINISHED
             } catch (cancelled: CancellationException) {
                 val latest = dao.get(id)
                 if (latest?.stage !in setOf(DownloadStage.PAUSED.name, DownloadStage.CANCELLED.name, DownloadStage.CANCELLING.name)) {
@@ -198,13 +201,15 @@ class DownloadRepository(
                 }
                 throw cancelled
             } catch (failure: Throwable) {
-                row = (dao.get(id) ?: row).copy(
-                    stage = DownloadStage.FAILED.name,
+                val latest = dao.get(id) ?: row
+                row = latest.copy(
+                    stage = transferFailureStage(failure).name,
                     errorCode = failure.javaClass.simpleName.take(80),
                     updatedAtEpochMs = now(),
                 )
                 dao.upsert(row)
                 progress(row.asModel())
+                if (row.stage == DownloadStage.INTERRUPTED.name) TransferExecutionResult.RETRY else TransferExecutionResult.FINISHED
             }
         } finally {
             TransferConcurrencyGate.release()
@@ -216,7 +221,7 @@ class DownloadRepository(
         grant.uri == uri && grant.isWritePermission
     }
 
-    private suspend fun executeCollection(initial: DownloadEntity, progress: suspend (DownloadJob) -> Unit) {
+    private suspend fun executeCollection(initial: DownloadEntity, progress: suspend (DownloadJob) -> Unit): TransferExecutionResult {
         var row = initial.copy(stage = DownloadStage.PREPARING.name, updatedAtEpochMs = now(), errorCode = null, currentItem = "Server preparation")
         dao.upsert(row)
         var serverJobId: String? = row.checkpointJson?.takeIf { it.startsWith("zipjob:") }?.substringAfter(':')
@@ -232,7 +237,7 @@ class DownloadRepository(
                 row = row.copy(checkpointJson = "zipjob:${serverJob.id}", updatedAtEpochMs = now())
                 dao.upsert(row)
                 var polls = 0
-                while (serverJob.state in setOf(ZipJobState.QUEUED, ZipJobState.PREPARING)) {
+                while (zipJobNeedsPolling(serverJob.state)) {
                     check(polls++ < 1_440) { "Collection preparation timed out" }
                     delay(5_000)
                     serverJob = api.zipStatus(serverJob.id)
@@ -289,18 +294,27 @@ class DownloadRepository(
             dao.upsert(row)
             archiveFile.delete()
             progress(row.asModel())
+            return TransferExecutionResult.FINISHED
         } catch (cancelled: CancellationException) {
             val latest = dao.get(row.id)
             if (latest?.stage !in setOf(DownloadStage.CANCELLED.name, DownloadStage.CANCELLING.name, DownloadStage.PAUSED.name)) dao.updateStage(row.id, DownloadStage.INTERRUPTED.name, now())
             throw cancelled
         } catch (failure: Throwable) {
-            row = (dao.get(row.id) ?: row).copy(stage = DownloadStage.FAILED.name, errorCode = failure.javaClass.simpleName.take(80), updatedAtEpochMs = now())
+            val latest = dao.get(row.id) ?: row
+            row = latest.copy(stage = transferFailureStage(failure).name, errorCode = failure.javaClass.simpleName.take(80), updatedAtEpochMs = now())
             dao.upsert(row)
             progress(row.asModel())
+            return if (row.stage == DownloadStage.INTERRUPTED.name) TransferExecutionResult.RETRY else TransferExecutionResult.FINISHED
         }
     }
 
     private data class Source(val url: String, val relativePath: String)
+    private fun transferFailureStage(failure: Throwable): DownloadStage =
+        if (retryableTransferFailure(failure)) {
+            DownloadStage.INTERRUPTED
+        } else {
+            DownloadStage.FAILED
+        }
     private fun encodeFileSource(url: String, relative: String): String = "FILE$SEPARATOR$url$SEPARATOR$relative"
     private fun decodeFileSource(value: String): Source {
         val parts = value.split(SEPARATOR, limit = 3)
@@ -312,6 +326,22 @@ class DownloadRepository(
         private const val SEPARATOR = '\u001F'
         private const val PATH_SEPARATOR = '\u001E'
     }
+}
+
+enum class TransferExecutionResult { FINISHED, RETRY }
+
+/** The server may briefly report a new state before settling into its documented queue states. */
+internal fun zipJobNeedsPolling(state: ZipJobState): Boolean =
+    state in setOf(ZipJobState.QUEUED, ZipJobState.PREPARING, ZipJobState.UNKNOWN)
+
+internal fun retryableTransferFailure(failure: Throwable): Boolean = when (failure) {
+    is HttpTransferException -> failure.status == 408 || failure.status == 429 || failure.status in 500..599
+    is NetworkException -> failure.error is VaultError.Offline ||
+        failure.error is VaultError.Timeout ||
+        failure.error is VaultError.RateLimited ||
+        failure.error is VaultError.Server
+    is IOException -> true
+    else -> false
 }
 
 private object TransferConcurrencyGate {

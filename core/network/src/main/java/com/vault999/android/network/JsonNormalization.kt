@@ -143,7 +143,7 @@ internal class JsonNormalizer(
         val rawState = clean(value.string("status") ?: value.string("state") ?: value.string("phase"), 40).lowercase()
         val state = when (rawState) {
             "queued", "pending" -> ZipJobState.QUEUED
-            "preparing", "processing", "running", "working" -> ZipJobState.PREPARING
+            "starting", "started", "accepted", "created", "preparing", "processing", "running", "working" -> ZipJobState.PREPARING
             "done", "complete", "completed", "ready", "success", "succeeded", "finished" -> ZipJobState.READY
             "cancelled", "canceled" -> ZipJobState.CANCELLED
             "failed", "error" -> ZipJobState.FAILED

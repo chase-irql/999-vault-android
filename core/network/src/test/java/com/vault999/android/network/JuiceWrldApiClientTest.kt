@@ -151,14 +151,14 @@ class JuiceWrldApiClientTest {
         val seen = mutableListOf<Request>()
         val bodies = ArrayDeque(
             listOf(
-                "{\"job_id\":\"$id\",\"status\":\"queued\"}",
+                "{\"job_id\":\"$id\",\"status\":\"starting\"}",
                 "{\"id\":\"$id\",\"status\":\"ready\",\"progress\":100,\"download_url\":\"/juicewrld/zip-jobs/$id.zip\"}",
                 "{\"status\":\"cancelled\"}",
             )
         )
         val api = client { request -> seen.add(request); response(request, 200, bodies.removeFirst()) }
 
-        assertEquals(ZipJobState.QUEUED, api.startZip(listOf("Compilation", "Compilation")).state)
+        assertEquals(ZipJobState.PREPARING, api.startZip(listOf("Compilation", "Compilation")).state)
         val ready = api.zipStatus(id)
         assertEquals(ZipJobState.READY, ready.state)
         assertEquals("https://juicewrldapi.com/juicewrld/zip-jobs/$id.zip", ready.downloadUrl)

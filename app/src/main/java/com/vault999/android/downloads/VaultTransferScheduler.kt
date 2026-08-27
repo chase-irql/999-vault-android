@@ -30,11 +30,13 @@ import com.vault999.android.VaultApplication
 import com.vault999.android.model.DownloadJob
 import com.vault999.android.model.DownloadStage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 class VaultTransferScheduler(private val context: Context) {
     fun schedule(id: String, estimatedBytes: Long?, wifiOnly: Boolean) {
@@ -74,8 +76,10 @@ class VaultTransferWorker(context: Context, parameters: WorkerParameters) : Coro
         val id = inputData.getString(VaultTransferScheduler.KEY_ID) ?: return Result.failure()
         val repository = (applicationContext as VaultApplication).graph.downloadRepository
         setForeground(notificationInfo(id, null))
-        repository.execute(id) { progress -> setForeground(notificationInfo(id, progress)) }
-        return Result.success()
+        return when (repository.execute(id) { progress -> setForeground(notificationInfo(id, progress)) }) {
+            TransferExecutionResult.FINISHED -> Result.success()
+            TransferExecutionResult.RETRY -> Result.retry()
+        }
     }
 
     private fun notificationInfo(id: String, job: DownloadJob?): ForegroundInfo =
@@ -85,21 +89,30 @@ class VaultTransferWorker(context: Context, parameters: WorkerParameters) : Coro
 @RequiresApi(34)
 class VaultTransferJobService : JobService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val running = mutableMapOf<Int, Job>()
+    private val running = ConcurrentHashMap<Int, Job>()
 
     override fun onStartJob(params: JobParameters): Boolean {
         val id = params.extras.getString(VaultTransferScheduler.KEY_ID) ?: return false
         setNotification(params, VaultTransferScheduler.jobId(id), TransferNotifications.build(this, id, null), JOB_END_NOTIFICATION_POLICY_DETACH)
-        running[params.jobId] = scope.launch {
-            try {
+        lateinit var launched: Job
+        launched = scope.launch(start = CoroutineStart.LAZY) {
+            val result = try {
                 (application as VaultApplication).graph.downloadRepository.execute(id) { progress ->
                     setNotification(params, VaultTransferScheduler.jobId(id), TransferNotifications.build(this@VaultTransferJobService, id, progress), JOB_END_NOTIFICATION_POLICY_DETACH)
                 }
-            } finally {
-                running.remove(params.jobId)
-                jobFinished(params, false)
+            } catch (_: CancellationException) {
+                return@launch
+            } catch (_: Throwable) {
+                TransferExecutionResult.RETRY
+            }
+            // onStopJob owns rescheduling after the system stops a job. Only a still-current run
+            // may call jobFinished; this avoids a cancelled coroutine racing that callback.
+            if (running.remove(params.jobId, launched)) {
+                jobFinished(params, result == TransferExecutionResult.RETRY)
             }
         }
+        running.put(params.jobId, launched)?.cancel(CancellationException("Transfer replaced"))
+        launched.start()
         return true
     }
 
